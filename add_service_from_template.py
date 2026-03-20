@@ -1,3 +1,5 @@
+from django.contrib.contenttypes.models import ContentType
+
 from extras.scripts import Script, MultiObjectVar, ObjectVar, BooleanVar
 from ipam.models import Service, ServiceTemplate
 from dcim.models import Device
@@ -58,17 +60,20 @@ class AddServiceFromTemplate(Script):
             self.log_failure("No devices or virtual machines selected.")
             return
 
-        targets = [("device", obj) for obj in devices] + [
-            ("virtual_machine", obj) for obj in vms
-        ]
+        targets = list(devices) + list(vms)
 
         created = 0
         updated = 0
         skipped = 0
 
-        for field, target in targets:
-            filter_kwargs = {"name": template.name, field: target}
-            existing = Service.objects.filter(**filter_kwargs).first()
+        for target in targets:
+            ct = ContentType.objects.get_for_model(target)
+
+            existing = Service.objects.filter(
+                name=template.name,
+                parent_object_type=ct,
+                parent_object_id=target.pk,
+            ).first()
 
             if existing:
                 if overwrite:
@@ -96,7 +101,8 @@ class AddServiceFromTemplate(Script):
                 protocol=template.protocol,
                 ports=template.ports,
                 description=template.description,
-                **{field: target},
+                parent_object_type=ct,
+                parent_object_id=target.pk,
             )
 
             if commit:
