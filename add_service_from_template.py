@@ -1,5 +1,6 @@
 from django.contrib.contenttypes.models import ContentType
 
+from extras.models import Tag
 from extras.scripts import Script, MultiObjectVar, ObjectVar, BooleanVar
 from ipam.models import Service, ServiceTemplate
 from dcim.models import Device
@@ -17,7 +18,7 @@ class AddServiceFromTemplate(Script):
         fieldsets = (
             ("Service Template", ("template",)),
             ("Targets", ("devices", "virtual_machines")),
-            ("Options", ("overwrite",)),
+            ("Options", ("tags", "overwrite")),
         )
         commit_default = True
 
@@ -41,6 +42,13 @@ class AddServiceFromTemplate(Script):
         description="Virtual machines to add the service to.",
     )
 
+    tags = MultiObjectVar(
+        model=Tag,
+        label="Tags",
+        required=False,
+        description="Tags to apply to each created or updated service.",
+    )
+
     overwrite = BooleanVar(
         label="Overwrite existing",
         description=(
@@ -54,6 +62,7 @@ class AddServiceFromTemplate(Script):
         template: ServiceTemplate = data["template"]
         devices = list(data.get("devices") or [])
         vms = list(data.get("virtual_machines") or [])
+        tags = list(data.get("tags") or [])
         overwrite: bool = data["overwrite"]
 
         if not devices and not vms:
@@ -83,6 +92,8 @@ class AddServiceFromTemplate(Script):
                     if commit:
                         existing.full_clean()
                         existing.save()
+                        if tags:
+                            existing.tags.set(tags)
                     self.log_info(
                         f"Updated existing service **{template.name}** on {target} "
                         f"({target.__class__.__name__})."
@@ -108,6 +119,8 @@ class AddServiceFromTemplate(Script):
             if commit:
                 service.full_clean()
                 service.save()
+                if tags:
+                    service.tags.set(tags)
 
             self.log_success(
                 f"Created service **{template.name}** on {target} "
