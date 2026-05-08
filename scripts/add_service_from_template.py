@@ -163,6 +163,25 @@ class AddServiceFromTemplate(Script):
         )
 
 
+def _normalize_cf_choices(raw):
+    """Return a flat list of (value, label) 2-tuples regardless of how NetBox stores them.
+
+    cf.choices may come back as plain strings ['a', 'b'], 2-tuples [('a', 'A'), ...],
+    or 3-tuples [('a', 'A', 'icon'), ...].  Wrapping non-tuple items naively produces
+    nested tuples that Django's Select widget misreads as optgroups, eventually trying
+    to unpack a string character-by-character and raising ValueError.
+    """
+    if not raw:
+        return []
+    result = []
+    for c in raw:
+        if isinstance(c, (list, tuple)):
+            result.append((c[0], c[1] if len(c) > 1 else c[0]))
+        else:
+            result.append((c, c))
+    return result
+
+
 # Dynamically add a form var for each custom field defined on the Service model.
 # This block runs at module import time so the fields appear in the script form.
 try:
@@ -173,39 +192,37 @@ try:
     _cf_var_names = []
 
     for _cf in _cf_list:
-        _var_name = f"cf_{_cf.name}"
-        _label = _cf.label or _cf.name.replace("_", " ").title()
-        _common = dict(label=_label, description=_cf.description or "", required=_cf.required)
-        _t = _cf.type
+        try:
+            _var_name = f"cf_{_cf.name}"
+            _label = _cf.label or _cf.name.replace("_", " ").title()
+            _common = dict(label=_label, description=_cf.description or "", required=_cf.required)
+            _t = _cf.type
 
-        if _t in ("text", "url", "date", "datetime"):
-            _var = StringVar(**_common)
-        elif _t == "longtext":
-            _var = TextVar(**_common)
-        elif _t in ("integer", "decimal"):
-            _var = IntegerVar(**_common)
-        elif _t == "boolean":
-            # required=True on a checkbox means "must be ticked"; leave that to full_clean()
-            _var = BooleanVar(label=_label, description=_common["description"])
-        elif _t == "select":
-            _choices = [(c, c) for c in (_cf.choices or [])]
-            _var = ChoiceVar(choices=_choices, **_common)
-        elif _t == "multiselect":
-            _choices = [(c, c) for c in (_cf.choices or [])]
-            _var = MultiChoiceVar(choices=_choices, **_common)
-        elif _t in ("object", "multiobject"):
-            try:
+            if _t in ("text", "url", "date", "datetime"):
+                _var = StringVar(**_common)
+            elif _t == "longtext":
+                _var = TextVar(**_common)
+            elif _t in ("integer", "decimal"):
+                _var = IntegerVar(**_common)
+            elif _t == "boolean":
+                # required=True on a checkbox means "must be ticked"; leave that to full_clean()
+                _var = BooleanVar(label=_label, description=_common["description"])
+            elif _t == "select":
+                _var = ChoiceVar(choices=_normalize_cf_choices(_cf.choices), **_common)
+            elif _t == "multiselect":
+                _var = MultiChoiceVar(choices=_normalize_cf_choices(_cf.choices), **_common)
+            elif _t in ("object", "multiobject"):
                 _model = _cf.related_object_type.model_class()
                 _var = (ObjectVar if _t == "object" else MultiObjectVar)(model=_model, **_common)
-            except Exception:
+            elif _t == "json":
+                _var = TextVar(**_common)
+            else:
                 _var = StringVar(**_common)
-        elif _t == "json":
-            _var = TextVar(**_common)
-        else:
-            _var = StringVar(**_common)
 
-        setattr(AddServiceFromTemplate, _var_name, _var)
-        _cf_var_names.append(_var_name)
+            setattr(AddServiceFromTemplate, _var_name, _var)
+            _cf_var_names.append(_var_name)
+        except Exception:
+            pass  # skip any single CF that can't be represented as a form var
 
     if _cf_var_names:
         AddServiceFromTemplate.Meta.fieldsets = (
