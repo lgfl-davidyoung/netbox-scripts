@@ -1,10 +1,29 @@
 from django.contrib.contenttypes.models import ContentType
 
 from extras.models import Tag
-from extras.scripts import Script, MultiObjectVar, ObjectVar, BooleanVar
+from extras.scripts import (
+    Script,
+    MultiObjectVar,
+    ObjectVar,
+    BooleanVar,
+    StringVar,
+    IntegerVar,
+    TextVar,
+    ChoiceVar,
+    MultiChoiceVar,
+)
 from ipam.models import Service, ServiceTemplate
 from dcim.models import Device
 from virtualization.models import VirtualMachine
+
+
+def _cf_value_for_storage(value):
+    """Convert a script var value to what custom_field_data expects (PKs, not instances)."""
+    if hasattr(value, "pk"):
+        return value.pk
+    if isinstance(value, (list, tuple)):
+        return [v.pk if hasattr(v, "pk") else v for v in value]
+    return value
 
 
 class AddServiceFromTemplate(Script):
@@ -65,6 +84,12 @@ class AddServiceFromTemplate(Script):
         tags = list(data.get("tags") or [])
         overwrite: bool = data["overwrite"]
 
+        cf_data = {
+            key[3:]: _cf_value_for_storage(value)
+            for key, value in data.items()
+            if key.startswith("cf_") and value not in (None, "", [])
+        }
+
         if not devices and not vms:
             self.log_failure("No devices or virtual machines selected.")
             return
@@ -89,6 +114,8 @@ class AddServiceFromTemplate(Script):
                     existing.protocol = template.protocol
                     existing.ports = template.ports
                     existing.description = template.description
+                    if cf_data:
+                        existing.custom_field_data.update(cf_data)
                     if commit:
                         existing.full_clean()
                         existing.save()
@@ -116,6 +143,9 @@ class AddServiceFromTemplate(Script):
                 parent_object_id=target.pk,
             )
 
+            if cf_data:
+                service.custom_field_data = cf_data
+
             if commit:
                 service.full_clean()
                 service.save()
@@ -131,3 +161,56 @@ class AddServiceFromTemplate(Script):
         self.log_info(
             f"Done — created: {created}, updated: {updated}, skipped: {skipped}."
         )
+
+
+# Dynamically add a form var for each custom field defined on the Service model.
+# This block runs at module import time so the fields appear in the script form.
+try:
+    from extras.models import CustomField as _CF
+
+    _service_ct = ContentType.objects.get_for_model(Service)
+    _cf_list = list(_CF.objects.filter(object_types=_service_ct).order_by("name"))
+    _cf_var_names = []
+
+    for _cf in _cf_list:
+        _var_name = f"cf_{_cf.name}"
+        _label = _cf.label or _cf.name.replace("_", " ").title()
+        _common = dict(label=_label, description=_cf.description or "", required=_cf.required)
+        _t = _cf.type
+
+        if _t in ("text", "url", "date", "datetime"):
+            _var = StringVar(**_common)
+        elif _t == "longtext":
+            _var = TextVar(**_common)
+        elif _t in ("integer", "decimal"):
+            _var = IntegerVar(**_common)
+        elif _t == "boolean":
+            # required=True on a checkbox means "must be ticked"; leave that to full_clean()
+            _var = BooleanVar(label=_label, description=_common["description"])
+        elif _t == "select":
+            _choices = [(c, c) for c in (_cf.choices or [])]
+            _var = ChoiceVar(choices=_choices, **_common)
+        elif _t == "multiselect":
+            _choices = [(c, c) for c in (_cf.choices or [])]
+            _var = MultiChoiceVar(choices=_choices, **_common)
+        elif _t in ("object", "multiobject"):
+            try:
+                _model = _cf.related_object_type.model_class()
+                _var = (ObjectVar if _t == "object" else MultiObjectVar)(model=_model, **_common)
+            except Exception:
+                _var = StringVar(**_common)
+        elif _t == "json":
+            _var = TextVar(**_common)
+        else:
+            _var = StringVar(**_common)
+
+        setattr(AddServiceFromTemplate, _var_name, _var)
+        _cf_var_names.append(_var_name)
+
+    if _cf_var_names:
+        AddServiceFromTemplate.Meta.fieldsets = (
+            *AddServiceFromTemplate.Meta.fieldsets,
+            ("Custom Fields", tuple(_cf_var_names)),
+        )
+except Exception:
+    pass
