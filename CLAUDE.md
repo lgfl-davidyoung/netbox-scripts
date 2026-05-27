@@ -10,11 +10,14 @@ Target platform: **NetBox 4.5.x** (currently 4.5.4).
 ## Repository Layout
 
 ```
-scripts/    # NetBox custom scripts — drop files here
-reports/    # NetBox custom reports — drop files here
+scripts/           # NetBox custom scripts — drop files here
+reports/           # NetBox custom reports — drop files here
+export-templates/  # NetBox export templates (Jinja) — see its CLAUDE.md
 ```
 
-Place new scripts in `scripts/` and new reports in `reports/`. Do not create subdirectories inside these folders.
+Place new scripts in `scripts/` and new reports in `reports/`. Do not create subdirectories inside these two folders.
+
+`export-templates/` holds Jinja templates pasted into NetBox's Customization → Export Templates UI. It has its own [CLAUDE.md](export-templates/CLAUDE.md) covering the Prometheus HTTP SD templates currently in there (data model, label reference, Jinja gotchas). Read that before editing anything under `export-templates/`.
 
 ## NetBox 4.5 API Notes
 
