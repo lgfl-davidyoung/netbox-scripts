@@ -1,0 +1,106 @@
+{#-
+  Prometheus HTTP SD export template — Devices.
+  Bind to: dcim.device
+-#}
+
+{%- macro jstr(s) -%}
+{{ s|string|replace('\\', '\\\\')|replace('"', '\\"')|replace('\n', '\\n')|replace('\r', '\\r')|replace('\t', '\\t') }}
+{%- endmacro -%}
+
+{%- macro build_labels(fields) -%}
+  {%- set lbl = namespace(parts=[]) -%}
+  {%- for name, value in fields -%}
+    {%- if value -%}
+      {%- set lbl.parts = lbl.parts + ['"' ~ name ~ '": "' ~ jstr(value)|trim ~ '"'] -%}
+    {%- endif -%}
+  {%- endfor -%}
+  { {{ lbl.parts | join(', ') }} }
+{%- endmacro -%}
+
+{%- macro target_addr(ip, port) -%}
+  {%- if ip.version == 6 -%}
+    [{{ ip }}]:{{ port }}
+  {%- else -%}
+    {{ ip }}:{{ port }}
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro param_value(v) -%}
+{%- if v is none or v == '' -%}
+{%- elif v is string -%}
+{{ v }}
+{%- elif v is iterable -%}
+{{ v | select | map('string') | join(',') }}
+{%- else -%}
+{{ v }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- set ns = namespace(rows=[]) -%}
+{%- for target in queryset -%}
+  {%- if target.status and target.primary_ip -%}
+    {%- set data = target.get_config_context() -%}
+    {%- if data.get('prometheus-plugin-prometheus-sd') -%}
+      {%- set prom = data['prometheus-plugin-prometheus-sd'] -%}
+      {%- set device_addr = target_addr(target.primary_ip.address.ip, prom.port)|trim -%}
+
+      {#- Exporter routing. -#}
+      {%- if prom.get('exporter') -%}
+        {%- set scrape_target = prom.exporter -%}
+        {%- if prom.get('target_scheme') -%}
+          {%- set param_target = prom.target_scheme ~ '://' ~ device_addr -%}
+        {%- else -%}
+          {%- set param_target = device_addr -%}
+        {%- endif -%}
+      {%- else -%}
+        {%- set scrape_target = device_addr -%}
+        {%- set param_target = None -%}
+      {%- endif -%}
+
+      {#- Params with custom field override. -#}
+      {%- set params_ns = namespace(parts=[]) -%}
+      {%- set ctx_params = prom.get('params') or {} -%}
+      {%- for k, v in ctx_params.items() -%}
+        {%- set cf_value = target.cf.get('prometheus_exporter_' ~ k) -%}
+        {%- set raw = cf_value if cf_value else v -%}
+        {%- set final = param_value(raw)|trim -%}
+        {%- set params_ns.parts = params_ns.parts + [('__param_' ~ k, final)] -%}
+      {%- endfor -%}
+
+      {#- Custom fields not covered by config context params. -#}
+      {%- set seen_keys = ctx_params.keys() | list -%}
+      {%- for cf_name, cf_value in target.cf.items() -%}
+        {%- if cf_name.startswith('prometheus_exporter_') and cf_value -%}
+          {%- set param_key = cf_name[20:] -%}
+          {%- if param_key not in seen_keys -%}
+            {%- set final = param_value(cf_value)|trim -%}
+            {%- set params_ns.parts = params_ns.parts + [('__param_' ~ param_key, final)] -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
+
+      {%- set fields = [
+        ('__param_target', param_target),
+      ] + params_ns.parts + [
+        ('target_name', target.name),
+        ('site', target.site.name if target.site else None),
+        ('dc', target.site.slug if target.site else None),
+        ('cluster', target.cluster.name if target.cluster else None),
+        ('tenant', target.tenant.name if target.tenant else None),
+        ('device_role', target.role.name if target.role else None),
+        ('platform', target.platform.name if target.platform else None),
+        ('model', target.device_type.model if target.device_type else None),
+        ('device_type', target.device_type.slug if target.device_type else None),
+      ] -%}
+      {%- set ns.rows = ns.rows + [(scrape_target, fields)] -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+[
+{%- for scrape_target, fields in ns.rows %}
+    {
+        "targets": ["{{ scrape_target }}"],
+        "labels": {{ build_labels(fields) }}
+    }{% if not loop.last %},{% endif %}
+{%- endfor %}
+]

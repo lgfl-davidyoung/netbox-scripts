@@ -1,0 +1,32 @@
+# Example Prometheus scrape config fragment for NetBox HTTP SD.
+#
+# Replace <device-template-id> / <service-template-id> with the numeric IDs
+# assigned by NetBox after creating the export templates (visible in the
+# Customization → Export Templates UI or via /api/extras/export-templates/).
+#
+# The render endpoint requires authentication if the NetBox instance has
+# LOGIN_REQUIRED enabled — pass a token via the Authorization header through
+# Prometheus' http_sd_configs basic_auth/authorization block.
+
+scrape_configs:
+  - job_name: netbox-sd-devices
+    http_sd_configs:
+      - url: https://netbox.internal.lgfl.net/api/extras/export-templates/<device-template-id>/render/
+        refresh_interval: 60s
+        authorization:
+          type: Token
+          credentials_file: /etc/prometheus/netbox-token
+
+  - job_name: netbox-sd-services
+    http_sd_configs:
+      - url: https://netbox.internal.lgfl.net/api/extras/export-templates/<service-template-id>/render/
+        refresh_interval: 60s
+        authorization:
+          type: Token
+          credentials_file: /etc/prometheus/netbox-token
+    relabel_configs:
+      # Preserve the probed device address as `instance` when exporter routing
+      # is in use; otherwise __param_target is unset and this is a no-op.
+      - source_labels: [__param_target]
+        target_label: instance
+        regex: (.+)

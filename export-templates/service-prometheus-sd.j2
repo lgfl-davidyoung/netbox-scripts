@@ -1,0 +1,109 @@
+{#-
+  Prometheus HTTP SD export template — Services.
+  Bind to: ipam.service
+-#}
+
+{%- macro jstr(s) -%}
+{{ s|string|replace('\\', '\\\\')|replace('"', '\\"')|replace('\n', '\\n')|replace('\r', '\\r')|replace('\t', '\\t') }}
+{%- endmacro -%}
+
+{%- macro build_labels(fields) -%}
+  {%- set lbl = namespace(parts=[]) -%}
+  {%- for name, value in fields -%}
+    {%- if value -%}
+      {%- set lbl.parts = lbl.parts + ['"' ~ name ~ '": "' ~ jstr(value)|trim ~ '"'] -%}
+    {%- endif -%}
+  {%- endfor -%}
+  { {{ lbl.parts | join(', ') }} }
+{%- endmacro -%}
+
+{%- macro target_addr(ip, port) -%}
+  {%- if ip.version == 6 -%}
+    [{{ ip }}]:{{ port }}
+  {%- else -%}
+    {{ ip }}:{{ port }}
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro param_value(v) -%}
+{%- if v is none or v == '' -%}
+{%- elif v is string -%}
+{{ v }}
+{%- elif v is iterable -%}
+{{ v | select | map('string') | join(',') }}
+{%- else -%}
+{{ v }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- set ns = namespace(rows=[]) -%}
+{%- for service in queryset -%}
+  {%- set parent = service.device or service.virtual_machine -%}
+  {%- if parent and parent.status and parent.primary_ip -%}
+    {%- set data = parent.get_config_context() -%}
+    {%- set prom = data.get('prometheus-plugin-prometheus-sd', {}) -%}
+    {%- set exporter = prom.get('exporter') -%}
+    {%- set target_scheme = prom.get('target_scheme') -%}
+
+    {#- Build params from parent's config context + parent's custom fields. -#}
+    {%- set params_ns = namespace(parts=[]) -%}
+    {%- set ctx_params = prom.get('params') or {} -%}
+    {%- for k, v in ctx_params.items() -%}
+      {%- set cf_value = parent.cf.get('prometheus_exporter_' ~ k) if parent.cf is defined else None -%}
+      {%- set raw = cf_value if cf_value else v -%}
+      {%- set final = param_value(raw)|trim -%}
+      {%- set params_ns.parts = params_ns.parts + [('__param_' ~ k, final)] -%}
+    {%- endfor -%}
+    {%- if parent.cf is defined -%}
+      {%- set seen_keys = ctx_params.keys() | list -%}
+      {%- for cf_name, cf_value in parent.cf.items() -%}
+        {%- if cf_name.startswith('prometheus_exporter_') and cf_value -%}
+          {%- set param_key = cf_name[20:] -%}
+          {%- if param_key not in seen_keys -%}
+            {%- set final = param_value(cf_value)|trim -%}
+            {%- set params_ns.parts = params_ns.parts + [('__param_' ~ param_key, final)] -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+
+    {%- set fields = [
+      ('target_name', parent.name),
+      ('service_name', service.name),
+      ('service_protocol', service.protocol),
+      ('site', parent.site.name if parent.site else None),
+      ('dc', parent.site.slug if parent.site else None),
+      ('cluster', parent.cluster.name if parent.cluster else None),
+      ('tenant', parent.tenant.name if parent.tenant else None),
+      ('device_role', parent.role.name if parent.role else None),
+      ('platform', parent.platform.name if parent.platform else None),
+      ('model', parent.device_type.model if parent.device_type is defined and parent.device_type else None),
+      ('device_type', parent.device_type.slug if parent.device_type is defined and parent.device_type else None),
+    ] -%}
+
+    {%- for port in service.ports -%}
+      {%- set probe_addr = target_addr(parent.primary_ip.address.ip, port)|trim -%}
+      {%- if exporter -%}
+        {%- set scrape_target = exporter -%}
+        {%- if target_scheme -%}
+          {%- set param_target = target_scheme ~ '://' ~ probe_addr -%}
+        {%- else -%}
+          {%- set param_target = probe_addr -%}
+        {%- endif -%}
+        {%- set row_fields = [('__param_target', param_target)] + params_ns.parts + fields -%}
+      {%- else -%}
+        {%- set scrape_target = probe_addr -%}
+        {%- set row_fields = fields -%}
+      {%- endif -%}
+      {%- set ns.rows = ns.rows + [(scrape_target, row_fields)] -%}
+    {%- endfor -%}
+  {%- endif -%}
+{%- endfor -%}
+[
+{%- for scrape_target, fields in ns.rows %}
+    {
+        "targets": ["{{ scrape_target }}"],
+        "labels": {{ build_labels(fields) }}
+    }{% if not loop.last %},{% endif %}
+{%- endfor %}
+]
