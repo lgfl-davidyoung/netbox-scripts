@@ -1,0 +1,78 @@
+{
+  "title": "Prometheus Export Template config context",
+  "description": "Schema for the prometheus-export-template and prometheus-export-template-oob config-context keys consumed by export-templates/device-prometheus-sd.j2 and service-prometheus-sd.j2. Upload this as the `schema` field of a NetBox ConfigContextProfile (Extras > Config Context Profiles > Add) and assign the profile to any ConfigContext that uses these keys.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "prometheus-export-template": {
+      "$ref": "#/$defs/exportTemplateBlock",
+      "description": "Primary scrape configuration. Typically scoped per role/OS (e.g. Linux Server -> node_exporter on 9100, Windows Server -> windows_exporter on 9182). Omit on devices that only need OOB monitoring."
+    },
+    "prometheus-export-template-oob": {
+      "$ref": "#/$defs/exportTemplateBlock",
+      "description": "OOB (iDRAC/iLO/BMC) scrape configuration. Typically scoped per manufacturer (e.g. Dell -> idrac-exporter). Devices without an oob_ip populated skip the OOB row automatically."
+    }
+  },
+  "$defs": {
+    "exportTemplateBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["port"],
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "TCP port on the device or exporter target. Required — a block with no port emits no target."
+        },
+        "scheme": {
+          "type": "string",
+          "enum": ["http", "https"],
+          "description": "Protocol used to reach the device. With `exporter` set, scheme prefixes `__param_target` so the exporter knows what protocol to probe. Without `exporter`, scheme is emitted as the Prometheus `__scheme__` meta-label, overriding the scrape job default."
+        },
+        "target_scheme": {
+          "type": "string",
+          "enum": ["http", "https"],
+          "deprecated": true,
+          "description": "Deprecated alias for `scheme`. Continues to work for backwards compatibility; prefer `scheme` in new contexts."
+        },
+        "metrics_path": {
+          "type": "string",
+          "pattern": "^/.*",
+          "description": "Path the metrics endpoint is served on. Emitted as the Prometheus `__metrics_path__` meta-label."
+        },
+        "exporter": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional exporter `host:port` that scrapes the device on your behalf (snmp_exporter, fortigate_exporter, idrac_exporter, blackbox-style probes, etc.). When set, the exporter becomes `__address__` and the device address moves to `__param_target` so the exporter receives it as a URL parameter."
+        },
+        "params": {
+          "type": "object",
+          "description": "Additional URL parameters passed to the exporter. Each key becomes a `__param_<key>` label. List values are CSV-joined (e.g. snmp_exporter modules).",
+          "additionalProperties": {
+            "anyOf": [
+              {"type": "string"},
+              {"type": "integer"},
+              {"type": "boolean"},
+              {"type": "null"},
+              {
+                "type": "array",
+                "items": {"type": ["string", "integer", "boolean"]}
+              }
+            ]
+          }
+        },
+        "scrape_interval": {
+          "type": "string",
+          "pattern": "^[0-9]+(ms|s|m|h|d|w|y)( *[0-9]+(ms|s|m|h|d|w|y))*$",
+          "description": "Per-target scrape interval override (Prometheus duration string, e.g. \"30s\", \"1m\", \"2m30s\"). Emitted as `__scrape_interval__`."
+        },
+        "scrape_timeout": {
+          "type": "string",
+          "pattern": "^[0-9]+(ms|s|m|h|d|w|y)( *[0-9]+(ms|s|m|h|d|w|y))*$",
+          "description": "Per-target scrape timeout override (Prometheus duration string). Emitted as `__scrape_timeout__`. Must be less than `scrape_interval`."
+        }
+      }
+    }
+  }
+}

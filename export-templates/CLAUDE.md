@@ -47,9 +47,9 @@ Devices opt into discovery by having a `prometheus-export-template` key in their
 }
 ```
 
-The template reads `port`, `scheme`, `metrics_path`, `exporter`, `params`, `scrape_interval`, `scrape_timeout`, and the optional `oob` sub-block when present (see "Exporter routing", "Scheme", "Extra params", "Scrape interval / timeout", and "OOB IP routing" below). `target_scheme` is accepted as a deprecated alias for `scheme`.
+The template reads `port`, `scheme`, `metrics_path`, `exporter`, `params`, `scrape_interval`, and `scrape_timeout` when present (see "Exporter routing", "Scheme", "Extra params", and "Scrape interval / timeout" below). `target_scheme` is accepted as a deprecated alias for `scheme`. OOB monitoring is configured via a separate top-level `prometheus-export-template-oob` context (see "OOB IP routing" below).
 
-The primary-IP target is emitted only when `port` is set. Omit `port` if you only want OOB emission for this device.
+The primary-IP target is emitted only when both `prometheus-export-template` is present and `port` is set. Drop the `prometheus-export-template` context entirely on devices that only need OOB monitoring.
 
 ### Exporter routing (snmp_exporter, fortigate_exporter, etc.)
 
@@ -137,49 +137,46 @@ For services, the override is pulled from the *parent device's* config context (
 
 ### OOB IP routing (iDRAC, BMCs)
 
-A single physical server often needs two scrape targets — node_exporter on the primary IP and an iDRAC/BMC exporter on the OOB IP — with different exporters and ports. Express that with an `oob` sub-block in the config context. Its shape is identical to the top-level block (`port`, `scheme`, `exporter`, `params`, `metrics_path`, `scrape_interval`, `scrape_timeout` all supported); when present, the template emits a second target rooted at `device.oob_ip`.
+A single physical server often needs two scrape targets — node_exporter (or windows_exporter) on the primary IP, and an iDRAC/BMC exporter on the OOB IP — with different exporters, ports, and ownership. The software side varies by OS (Linux → node_exporter:9100, Windows → windows_exporter:9182), but the hardware side is identical across all servers from the same vendor.
 
-Example — node_exporter on primary + iDRAC on OOB:
+To keep those two concerns independent, OOB monitoring uses a **separate top-level config-context key**: `prometheus-export-template-oob`. The schema mirrors `prometheus-export-template` (`port`, `scheme`, `exporter`, `params`, `metrics_path`, `scrape_interval`, `scrape_timeout` all supported). Scope it to a manufacturer (e.g. Dell) in NetBox; the OS-specific `prometheus-export-template` stays scoped to a role.
+
+Example — a Dell server running Linux gets both contexts merged:
 
 ```json
 {
     "prometheus-export-template": {
         "port": 9100,
         "metrics_path": "/metrics",
-        "oob": {
-            "port": 443,
-            "scheme": "https",
-            "exporter": "idrac-exporter.internal.lgfl.net:9348"
-        }
+        "scheme": "http"
+    },
+    "prometheus-export-template-oob": {
+        "port": 443,
+        "scheme": "https",
+        "exporter": "idrac-exporter.internal.lgfl.net:9348",
+        "metrics_path": "/metrics"
     }
 }
 ```
 
-OOB-only (no node_exporter on primary) — omit top-level `port`:
+In NetBox you'd configure each separately:
+- A "Linux Server" role context with just the `prometheus-export-template` block (9100/http)
+- A "Windows Server" role context with `prometheus-export-template` set differently (9182/http, windows_exporter)
+- A "Dell" manufacturer context with just the `prometheus-export-template-oob` block (443/https/iDRAC)
 
-```json
-{
-    "prometheus-export-template": {
-        "oob": {
-            "port": 443,
-            "scheme": "https",
-            "exporter": "idrac-exporter.internal.lgfl.net:9348"
-        }
-    }
-}
-```
+NetBox merges all applicable contexts onto each device, so Linux-on-Dell, Windows-on-Dell, and "OOB-only" appliances each get exactly what they need without overlap.
 
 **Emission rules:**
 
-- Primary target is emitted iff `device.primary_ip` exists AND the top-level dict has `port` set.
-- OOB target is emitted iff `device.oob_ip` exists AND the `oob` sub-block is present.
+- Primary target is emitted iff `prometheus-export-template` is set, `device.primary_ip` exists, and the context has `port`.
+- OOB target is emitted iff `prometheus-export-template-oob` is set, `device.oob_ip` exists, and the context has `port`.
 - Both checks are independent: a device emits 0, 1, or 2 targets.
 
-**Shared vs. per-target labels:** the info labels (`target_name`, `site`, `dc`, `cluster`, `tenant`, `device_role`, `platform`, `manufacturer`, `device_type`, `location`, `rack`, `description`) are identical on both rows. The per-target labels — `__address__` (`"targets"` value), `__param_target`, `__param_*`, `__metrics_path__`, `__scheme__`, `__scrape_interval__`, `__scrape_timeout__` — come from each block independently.
+**Shared vs. per-target labels:** the info labels (`target_name`, `site`, `dc`, `cluster`, `tenant`, `device_role`, `platform`, `manufacturer`, `device_type`, `location`, `rack`, `description`) are identical on both rows. The per-target labels — `__address__` (`"targets"` value), `__param_target`, `__param_*`, `__metrics_path__`, `__scheme__`, `__scrape_interval__`, `__scrape_timeout__` — come from each context independently.
 
-**Custom-field overrides apply to the primary emission only.** The `oob` sub-dict is self-contained — to override an OOB param, edit the config context, not a custom field. This avoids the ambiguity of "which target does this CF apply to?" and means iDRAC-style scrape config can't be accidentally broken by a stray `prometheus_exporter_*` CF on the device.
+**Custom-field overrides apply to the primary emission only.** The OOB context is self-contained — to override an OOB param, edit the config context, not a custom field. This avoids the ambiguity of "which target does this CF apply to?" and means iDRAC-style scrape config can't be accidentally broken by a stray `prometheus_exporter_*` CF on the device.
 
-For services with an `oob` block on the parent device, the template emits a full set of (service, port) rows from the OOB IP as well — one row per port from each IP source. VMs don't have OOB IPs and skip the OOB branch automatically.
+For services on a device whose parent has `prometheus-export-template-oob`, the service template emits an additional (service, port) row per port using the OOB IP. VMs don't have OOB IPs and skip the OOB branch automatically.
 
 ### Custom field overrides
 

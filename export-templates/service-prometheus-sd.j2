@@ -42,6 +42,7 @@
   {%- if parent and parent.status -%}
     {%- set data = parent.get_config_context() -%}
     {%- set prom = data.get('prometheus-export-template', {}) -%}
+    {%- set prom_oob = data.get('prometheus-export-template-oob') -%}
 
     {#- Shared info labels — identical across all emissions and ports of this service. -#}
     {%- set info_fields = [
@@ -64,14 +65,15 @@
     {#- Build the list of (ip_obj, cfg, is_primary) emissions for this service's parent.
         Primary: emit if parent has primary_ip (legacy behaviour — no `port` requirement
                  since the service contributes its own ports).
-        OOB:     emit if parent has oob_ip AND config context has `oob` sub-block.
-                 VMs lack `oob_ip` — `is defined` guard skips them. -#}
+        OOB:     emit if `prometheus-export-template-oob` context is set on the parent
+                 and parent has `oob_ip`. VMs lack `oob_ip` — `is defined` guard skips
+                 them. -#}
     {%- set emissions = namespace(items=[]) -%}
     {%- if parent.primary_ip -%}
       {%- set emissions.items = emissions.items + [(parent.primary_ip, prom, true)] -%}
     {%- endif -%}
-    {%- if parent.oob_ip is defined and parent.oob_ip and prom.get('oob') -%}
-      {%- set emissions.items = emissions.items + [(parent.oob_ip, prom.oob, false)] -%}
+    {%- if parent.oob_ip is defined and parent.oob_ip and prom_oob -%}
+      {%- set emissions.items = emissions.items + [(parent.oob_ip, prom_oob, false)] -%}
     {%- endif -%}
 
     {%- for source_ip_obj, cfg, is_primary in emissions.items -%}

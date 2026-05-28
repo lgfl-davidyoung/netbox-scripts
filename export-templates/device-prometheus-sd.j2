@@ -40,8 +40,9 @@
 {%- for target in queryset -%}
   {%- if target.status -%}
     {%- set data = target.get_config_context() -%}
-    {%- if data.get('prometheus-export-template') -%}
-      {%- set prom = data['prometheus-export-template'] -%}
+    {%- set prom = data.get('prometheus-export-template') -%}
+    {%- set prom_oob = data.get('prometheus-export-template-oob') -%}
+    {%- if prom or prom_oob -%}
 
       {#- Shared info labels — identical on primary and OOB emissions. -#}
       {%- set info_fields = [
@@ -60,15 +61,20 @@
       ] -%}
 
       {#- Build the list of (ip_obj, cfg, is_primary) emissions for this device.
-          Primary: emit if device has primary_ip AND top-level dict has `port`.
-          OOB:     emit if device has oob_ip AND config context has `oob` sub-block.
-          CFs apply to the primary emission only — the `oob` block is self-contained. -#}
+          Primary: emit if `prometheus-export-template` context is set, device has
+                   primary_ip, and the context has `port`.
+          OOB:     emit if `prometheus-export-template-oob` context is set, device
+                   has oob_ip, and the context has `port`.
+          The two contexts are independent — software monitoring (per OS/role) and
+          OOB monitoring (per hardware/manufacturer) can be scoped separately in
+          NetBox and merged onto the device. CFs apply to the primary emission
+          only — the OOB context is self-contained. -#}
       {%- set emissions = namespace(items=[]) -%}
-      {%- if target.primary_ip and prom.get('port') -%}
+      {%- if prom and target.primary_ip and prom.get('port') -%}
         {%- set emissions.items = emissions.items + [(target.primary_ip, prom, true)] -%}
       {%- endif -%}
-      {%- if target.oob_ip and prom.get('oob') -%}
-        {%- set emissions.items = emissions.items + [(target.oob_ip, prom.oob, false)] -%}
+      {%- if prom_oob and target.oob_ip and prom_oob.get('port') -%}
+        {%- set emissions.items = emissions.items + [(target.oob_ip, prom_oob, false)] -%}
       {%- endif -%}
 
       {%- for source_ip_obj, cfg, is_primary in emissions.items -%}

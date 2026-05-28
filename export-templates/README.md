@@ -7,7 +7,7 @@ Two NetBox export templates that emit Prometheus `http_sd_config` JSON:
 | [device-prometheus-sd.j2](device-prometheus-sd.j2) | `dcim.device` | One target per device that has a `prometheus-export-template` config context entry |
 | [service-prometheus-sd.j2](service-prometheus-sd.j2) | `ipam.service` | One target per (service, port) pair, with labels inherited from the parent device/VM |
 
-See [CLAUDE.md](CLAUDE.md) for the full data model, label reference, exporter-routing rules, and Jinja gotchas.
+See [CLAUDE.md](CLAUDE.md) for the full data model, label reference, exporter-routing rules, and Jinja gotchas. A NetBox-compatible JSON Schema for the config-context shape lives at [prometheus-export-template.schema.json](prometheus-export-template.schema.json) — upload it as a Config Context Profile (Extras → Config Context Profiles → Add) to get validation in the NetBox UI.
 
 ## Install
 
@@ -58,23 +58,30 @@ These become `__scrape_interval__` / `__scrape_timeout__` meta-labels and are co
 
 ## OOB IP routing (iDRAC, BMCs)
 
-For physical servers that need both a node_exporter scrape (primary IP) and an iDRAC/BMC scrape (OOB IP), add an `oob` sub-block alongside the top-level config. The template emits one target per IP source:
+For physical servers that need both a software scrape (primary IP, varies by OS) and an iDRAC/BMC scrape (OOB IP, identical per hardware vendor), use a **separate** top-level config-context key — `prometheus-export-template-oob` — so the two concerns can be scoped independently in NetBox. Typical setup:
+
+- A role-scoped context (e.g. "Linux Server", "Windows Server") supplies `prometheus-export-template` with the appropriate exporter port.
+- A manufacturer-scoped context (e.g. "Dell") supplies `prometheus-export-template-oob` once for the whole fleet.
+
+NetBox merges both onto each device:
 
 ```json
 {
     "prometheus-export-template": {
         "port": 9100,
         "metrics_path": "/metrics",
-        "oob": {
-            "port": 443,
-            "scheme": "https",
-            "exporter": "idrac-exporter.internal.lgfl.net:9348"
-        }
+        "scheme": "http"
+    },
+    "prometheus-export-template-oob": {
+        "port": 443,
+        "scheme": "https",
+        "exporter": "idrac-exporter.internal.lgfl.net:9348",
+        "metrics_path": "/metrics"
     }
 }
 ```
 
-The OOB target uses `device.oob_ip` and the `oob` sub-block's settings; the primary target keeps using `device.primary_ip` and the top-level settings. Omit top-level `port` to emit OOB only. Custom-field overrides apply to the primary target only — the `oob` sub-dict is self-contained. Full rules in [CLAUDE.md](CLAUDE.md#oob-ip-routing-idrac-bmcs).
+Devices without an OOB IP populated skip the OOB row automatically. Devices that only need OOB monitoring can omit `prometheus-export-template` entirely. Custom-field overrides apply to the primary target only — the OOB context is self-contained. Full rules in [CLAUDE.md](CLAUDE.md#oob-ip-routing-idrac-bmcs).
 
 ## Per-device overrides
 
