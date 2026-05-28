@@ -56,6 +56,26 @@ To override Prometheus' job-level scrape cadence on specific devices, add `scrap
 
 These become `__scrape_interval__` / `__scrape_timeout__` meta-labels and are consumed by Prometheus directly — no relabel rule needed.
 
+## OOB IP routing (iDRAC, BMCs)
+
+For physical servers that need both a node_exporter scrape (primary IP) and an iDRAC/BMC scrape (OOB IP), add an `oob` sub-block alongside the top-level config. The template emits one target per IP source:
+
+```json
+{
+    "prometheus-export-template": {
+        "port": 9100,
+        "metrics_path": "/metrics",
+        "oob": {
+            "port": 443,
+            "exporter": "idrac-exporter.internal.lgfl.net:9348",
+            "target_scheme": "https"
+        }
+    }
+}
+```
+
+The OOB target uses `device.oob_ip` and the `oob` sub-block's settings; the primary target keeps using `device.primary_ip` and the top-level settings. Omit top-level `port` to emit OOB only. Custom-field overrides apply to the primary target only — the `oob` sub-dict is self-contained. Full rules in [CLAUDE.md](CLAUDE.md#oob-ip-routing-idrac-bmcs).
+
 ## Per-device overrides
 
 Set a custom field named `prometheus_exporter_<param>` on the device to override (or add) a single param without forking the config context. Multi-select custom fields are CSV-joined automatically.

@@ -47,7 +47,9 @@ Devices opt into discovery by having a `prometheus-export-template` key in their
 }
 ```
 
-`port` is the only field the template currently reads from this block directly — `metrics_path` and `scheme` are passed through via relabel config on the Prometheus side if needed (see relabel config below). The template also reads `exporter`, `target_scheme`, `params`, `scrape_interval`, and `scrape_timeout` when present (see "Exporter routing", "Extra params", and "Scrape interval / timeout" below).
+The template reads `port`, `metrics_path`, `exporter`, `target_scheme`, `params`, `scrape_interval`, `scrape_timeout`, and the optional `oob` sub-block when present (see "Exporter routing", "Extra params", "Scrape interval / timeout", and "OOB IP routing" below). `scheme` is informational only — Prometheus determines scheme from the scrape job, not from per-target labels.
+
+The primary-IP target is emitted only when `port` is set. Omit `port` if you only want OOB emission for this device.
 
 ### Exporter routing (snmp_exporter, fortigate_exporter, etc.)
 
@@ -113,6 +115,52 @@ These are emitted as the Prometheus meta-labels `__scrape_interval__` and `__scr
 
 For services, the override is pulled from the *parent device's* config context (same as `exporter` / `target_scheme` / `params`), so every (service, port) row inherits it.
 
+### OOB IP routing (iDRAC, BMCs)
+
+A single physical server often needs two scrape targets — node_exporter on the primary IP and an iDRAC/BMC exporter on the OOB IP — with different exporters and ports. Express that with an `oob` sub-block in the config context. Its shape is identical to the top-level block (`port`, `exporter`, `target_scheme`, `params`, `metrics_path`, `scrape_interval`, `scrape_timeout` all supported); when present, the template emits a second target rooted at `device.oob_ip`.
+
+Example — node_exporter on primary + iDRAC on OOB:
+
+```json
+{
+    "prometheus-export-template": {
+        "port": 9100,
+        "metrics_path": "/metrics",
+        "oob": {
+            "port": 443,
+            "exporter": "idrac-exporter.internal.lgfl.net:9348",
+            "target_scheme": "https"
+        }
+    }
+}
+```
+
+OOB-only (no node_exporter on primary) — omit top-level `port`:
+
+```json
+{
+    "prometheus-export-template": {
+        "oob": {
+            "port": 443,
+            "exporter": "idrac-exporter.internal.lgfl.net:9348",
+            "target_scheme": "https"
+        }
+    }
+}
+```
+
+**Emission rules:**
+
+- Primary target is emitted iff `device.primary_ip` exists AND the top-level dict has `port` set.
+- OOB target is emitted iff `device.oob_ip` exists AND the `oob` sub-block is present.
+- Both checks are independent: a device emits 0, 1, or 2 targets.
+
+**Shared vs. per-target labels:** the info labels (`target_name`, `site`, `dc`, `cluster`, `tenant`, `device_role`, `platform`, `model`, `device_type`, `location`, `rack`, `description`) are identical on both rows. The per-target labels — `__address__` (`"targets"` value), `__param_target`, `__param_*`, `__metrics_path__`, `__scrape_interval__`, `__scrape_timeout__` — come from each block independently.
+
+**Custom-field overrides apply to the primary emission only.** The `oob` sub-dict is self-contained — to override an OOB param, edit the config context, not a custom field. This avoids the ambiguity of "which target does this CF apply to?" and means iDRAC-style scrape config can't be accidentally broken by a stray `prometheus_exporter_*` CF on the device.
+
+For services with an `oob` block on the parent device, the template emits a full set of (service, port) rows from the OOB IP as well — one row per port from each IP source. VMs don't have OOB IPs and skip the OOB branch automatically.
+
 ### Custom field overrides
 
 For per-device overrides without forking a config context, set a custom field named `prometheus_exporter_<param>` on the device. It wins over the config context value for that one param. Custom fields with this prefix that don't have a matching context key are also picked up as fresh params.
@@ -136,6 +184,8 @@ Exporter routing for services pulls `exporter` / `target_scheme` / `params` from
 
 ## Labels emitted
 
+Shared labels (identical on primary and OOB rows for the same device):
+
 | Label              | Source                          |
 |--------------------|---------------------------------|
 | `target_name`      | device/parent name              |
@@ -149,12 +199,21 @@ Exporter routing for services pulls `exporter` / `target_scheme` / `params` from
 | `platform`         | platform.name                   |
 | `model`            | device_type.model               |
 | `device_type`      | device_type.slug                |
-| `__param_<name>`   | from config context `params` or `prometheus_exporter_*` custom fields |
-| `__param_target`   | device address when `exporter` is set (with optional scheme prefix) |
-| `__scrape_interval__` | config context `scrape_interval` or `prometheus_exporter_scrape_interval` CF |
-| `__scrape_timeout__` | config context `scrape_timeout` or `prometheus_exporter_scrape_timeout` CF |
+| `location`         | location.name (devices only)    |
+| `rack`             | rack.name (devices only)        |
+| `description`     | description field               |
 
-`__param_*` labels are stripped by Prometheus after relabel (they're meta-labels). To preserve the probed address as a regular label on metrics, the Prometheus relabel config should copy `__param_target` to `instance` or similar — see "Prometheus relabel config" below.
+Per-target labels (differ between primary and OOB rows — each block has its own values):
+
+| Label                 | Source                          |
+|-----------------------|---------------------------------|
+| `__param_<name>`      | block's `params` dict, or `prometheus_exporter_*` custom fields (primary only) |
+| `__param_target`      | device IP when `exporter` is set (with optional `target_scheme` prefix) |
+| `__metrics_path__`    | block's `metrics_path` key      |
+| `__scrape_interval__` | block's `scrape_interval` key, or `prometheus_exporter_scrape_interval` CF (primary only) |
+| `__scrape_timeout__`  | block's `scrape_timeout` key, or `prometheus_exporter_scrape_timeout` CF (primary only) |
+
+`__param_*` labels are stripped by Prometheus after relabel (they're meta-labels). To preserve the probed address as a regular label on metrics, the Prometheus relabel config should copy `__param_target` to `instance` or similar — see "Prometheus relabel config" below. `__metrics_path__`, `__scrape_interval__`, `__scrape_timeout__` are also Prometheus meta-labels consumed natively — no relabel rule needed.
 
 ## Templates
 
