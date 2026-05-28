@@ -8,7 +8,10 @@
       "Bash(curl -s \"https://raw.githubusercontent.com/netbox-community/netbox/v4.5.4/netbox/ipam/models/services.py\")",
       "Read(//c/Users/DavidYoung/.claude/projects/c--Users-DavidYoung-OneDrive---London-Grid-For-Learning-Trust-code-netbox-scripts/**)",
       "Read(//c/Users/DavidYoung/.claude/projects/c--Users-DavidYoung-OneDrive---London-Grid-For-Learning-Trust-code-netbox-scripts/memory/**)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(curl *)"
     ]
   }
 }

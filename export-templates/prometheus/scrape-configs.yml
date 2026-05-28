@@ -11,7 +11,7 @@
 scrape_configs:
   - job_name: netbox-sd-devices
     http_sd_configs:
-      - url: https://netbox-dev.internal.lgfl.net/api/dcim/devices/?export=prometheus
+      - url: https://netbox-dev.internal.lgfl.net/api/dcim/devices/?export=prometheus_device
         authorization:
           type: "Token"
           credentials: "lOG6F4fhi551ZzbzeY1gPLFmejXx7HAjwQ49lDcG"

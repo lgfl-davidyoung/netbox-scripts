@@ -40,7 +40,7 @@ Add a config context (device, role, site, tenant, etc.) containing:
 
 Devices without this key are silently skipped, so it's safe to scope the context broadly.
 
-For exporter-routed scrapes (snmp_exporter, fortigate_exporter, blackbox-style probes via a translating exporter), add `exporter`, `target_scheme`, and `params` — full reference in [CLAUDE.md](CLAUDE.md#exporter-routing-snmp_exporter-fortigate_exporter-etc).
+For exporter-routed scrapes (snmp_exporter, fortigate_exporter, blackbox-style probes via a translating exporter), add `exporter`, `scheme`, and `params` — full reference in [CLAUDE.md](CLAUDE.md#exporter-routing-snmp_exporter-fortigate_exporter-etc).
 
 To override Prometheus' job-level scrape cadence on specific devices, add `scrape_interval` and/or `scrape_timeout` (Prometheus duration strings like `30s`, `1m`):
 
@@ -67,8 +67,8 @@ For physical servers that need both a node_exporter scrape (primary IP) and an i
         "metrics_path": "/metrics",
         "oob": {
             "port": 443,
-            "exporter": "idrac-exporter.internal.lgfl.net:9348",
-            "target_scheme": "https"
+            "scheme": "https",
+            "exporter": "idrac-exporter.internal.lgfl.net:9348"
         }
     }
 }

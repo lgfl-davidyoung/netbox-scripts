@@ -54,8 +54,8 @@
       ('tenant', parent.tenant.name if parent.tenant else None),
       ('device_role', parent.role.name if parent.role else None),
       ('platform', parent.platform.name if parent.platform else None),
-      ('model', parent.device_type.model if parent.device_type is defined and parent.device_type else None),
-      ('device_type', parent.device_type.slug if parent.device_type is defined and parent.device_type else None),
+      ('manufacturer', parent.device_type.manufacturer.name if parent.device_type is defined and parent.device_type and parent.device_type.manufacturer else None),
+      ('device_type', parent.device_type.model if parent.device_type is defined and parent.device_type else None),
       ('location', parent.location.name if parent.location is defined and parent.location else None),
       ('rack', parent.rack.name if parent.rack is defined and parent.rack else None),
       ('description', parent.description if parent.description is defined and parent.description else None),
@@ -76,7 +76,9 @@
 
     {%- for source_ip_obj, cfg, is_primary in emissions.items -%}
       {%- set exporter = cfg.get('exporter') -%}
-      {%- set target_scheme = cfg.get('target_scheme') -%}
+      {#- Scheme: prefixes __param_target when exporter routing is in use, emitted as
+          __scheme__ otherwise. `target_scheme` is kept as a legacy alias for `scheme`. -#}
+      {%- set scheme = cfg.get('scheme') or cfg.get('target_scheme') -%}
 
       {#- Scrape interval / timeout — CFs only on primary. -#}
       {%- if is_primary and parent.cf is defined -%}
@@ -125,16 +127,21 @@
         {%- set probe_addr = target_addr(source_ip_obj.address.ip, port)|trim -%}
         {%- if exporter -%}
           {%- set scrape_target = exporter -%}
-          {%- if target_scheme -%}
-            {%- set param_target = target_scheme ~ '://' ~ probe_addr -%}
+          {%- if scheme -%}
+            {%- set param_target = scheme ~ '://' ~ probe_addr -%}
           {%- else -%}
             {%- set param_target = probe_addr -%}
           {%- endif -%}
-          {%- set row_fields = [('__param_target', param_target)] + per_emission_fields + params_ns.parts + info_fields -%}
+          {%- set scheme_label = None -%}
         {%- else -%}
           {%- set scrape_target = probe_addr -%}
-          {%- set row_fields = per_emission_fields + params_ns.parts + info_fields -%}
+          {%- set param_target = None -%}
+          {%- set scheme_label = scheme -%}
         {%- endif -%}
+        {%- set row_fields = [
+          ('__param_target', param_target),
+          ('__scheme__', scheme_label),
+        ] + per_emission_fields + params_ns.parts + info_fields -%}
         {%- set ns.rows = ns.rows + [(scrape_target, row_fields)] -%}
       {%- endfor -%}
     {%- endfor -%}

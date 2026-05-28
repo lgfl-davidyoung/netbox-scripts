@@ -52,8 +52,8 @@
         ('tenant', target.tenant.name if target.tenant else None),
         ('device_role', target.role.name if target.role else None),
         ('platform', target.platform.name if target.platform else None),
-        ('model', target.device_type.model if target.device_type else None),
-        ('device_type', target.device_type.slug if target.device_type else None),
+        ('manufacturer', target.device_type.manufacturer.name if target.device_type and target.device_type.manufacturer else None),
+        ('device_type', target.device_type.model if target.device_type else None),
         ('location', target.location.name if target.location else None),
         ('rack', target.rack.name if target.rack else None),
         ('description', target.description if target.description else None),
@@ -74,17 +74,25 @@
       {%- for source_ip_obj, cfg, is_primary in emissions.items -%}
         {%- set device_addr = target_addr(source_ip_obj.address.ip, cfg.port)|trim -%}
 
+        {#- Scheme: when exporter routing is in use, scheme prefixes __param_target so
+            the exporter knows what protocol to probe. With no exporter, scheme is emitted
+            as the Prometheus meta-label __scheme__. `target_scheme` is kept as a legacy
+            alias for `scheme`. -#}
+        {%- set scheme = cfg.get('scheme') or cfg.get('target_scheme') -%}
+
         {#- Exporter routing. -#}
         {%- if cfg.get('exporter') -%}
           {%- set scrape_target = cfg.exporter -%}
-          {%- if cfg.get('target_scheme') -%}
-            {%- set param_target = cfg.target_scheme ~ '://' ~ device_addr -%}
+          {%- if scheme -%}
+            {%- set param_target = scheme ~ '://' ~ device_addr -%}
           {%- else -%}
             {%- set param_target = device_addr -%}
           {%- endif -%}
+          {%- set scheme_label = None -%}
         {%- else -%}
           {%- set scrape_target = device_addr -%}
           {%- set param_target = None -%}
+          {%- set scheme_label = scheme -%}
         {%- endif -%}
 
         {#- Scrape interval / timeout (Prometheus meta-labels). CFs only on primary. -#}
@@ -129,6 +137,7 @@
         {%- set fields = [
           ('__param_target', param_target),
           ('__metrics_path__', cfg.get('metrics_path')),
+          ('__scheme__', scheme_label),
           ('__scrape_interval__', scrape_interval),
           ('__scrape_timeout__', scrape_timeout),
         ] + params_ns.parts + info_fields -%}
