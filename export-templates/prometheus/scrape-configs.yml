@@ -11,19 +11,10 @@
 scrape_configs:
   - job_name: netbox-sd-devices
     http_sd_configs:
-      - url: https://netbox.internal.lgfl.net/api/extras/export-templates/<device-template-id>/render/
-        refresh_interval: 60s
+      - url: https://netbox-dev.internal.lgfl.net/api/dcim/devices/?export=prometheus
         authorization:
-          type: Token
-          credentials_file: /etc/prometheus/netbox-token
-
-  - job_name: netbox-sd-services
-    http_sd_configs:
-      - url: https://netbox.internal.lgfl.net/api/extras/export-templates/<service-template-id>/render/
-        refresh_interval: 60s
-        authorization:
-          type: Token
-          credentials_file: /etc/prometheus/netbox-token
+          type: "Token"
+          credentials: "lOG6F4fhi551ZzbzeY1gPLFmejXx7HAjwQ49lDcG"
     relabel_configs:
       # Preserve the probed device address as `instance` when exporter routing
       # is in use; otherwise __param_target is unset and this is a no-op.
