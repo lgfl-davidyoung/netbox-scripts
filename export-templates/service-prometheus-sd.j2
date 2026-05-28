@@ -41,9 +41,13 @@
   {%- set parent = service.device or service.virtual_machine -%}
   {%- if parent and parent.status and parent.primary_ip -%}
     {%- set data = parent.get_config_context() -%}
-    {%- set prom = data.get('prometheus-plugin-prometheus-sd', {}) -%}
+    {%- set prom = data.get('prometheus-export-template', {}) -%}
     {%- set exporter = prom.get('exporter') -%}
     {%- set target_scheme = prom.get('target_scheme') -%}
+
+    {#- Scrape interval / timeout overrides (emitted as Prometheus meta-labels). -#}
+    {%- set scrape_interval = (parent.cf.get('prometheus_exporter_scrape_interval') if parent.cf is defined else None) or prom.get('scrape_interval') -%}
+    {%- set scrape_timeout = (parent.cf.get('prometheus_exporter_scrape_timeout') if parent.cf is defined else None) or prom.get('scrape_timeout') -%}
 
     {#- Build params from parent's config context + parent's custom fields. -#}
     {%- set params_ns = namespace(parts=[]) -%}
@@ -55,7 +59,9 @@
       {%- set params_ns.parts = params_ns.parts + [('__param_' ~ k, final)] -%}
     {%- endfor -%}
     {%- if parent.cf is defined -%}
-      {%- set seen_keys = ctx_params.keys() | list -%}
+      {#- Keys handled out-of-band (not __param_*) are excluded from this sweep. -#}
+      {%- set reserved_cf_keys = ['scrape_interval', 'scrape_timeout'] -%}
+      {%- set seen_keys = (ctx_params.keys() | list) + reserved_cf_keys -%}
       {%- for cf_name, cf_value in parent.cf.items() -%}
         {%- if cf_name.startswith('prometheus_exporter_') and cf_value -%}
           {%- set param_key = cf_name[20:] -%}
@@ -68,6 +74,8 @@
     {%- endif -%}
 
     {%- set fields = [
+      ('__scrape_interval__', scrape_interval),
+      ('__scrape_timeout__', scrape_timeout),
       ('target_name', parent.name),
       ('service_name', service.name),
       ('service_protocol', service.protocol),

@@ -40,8 +40,8 @@
 {%- for target in queryset -%}
   {%- if target.status and target.primary_ip -%}
     {%- set data = target.get_config_context() -%}
-    {%- if data.get('prometheus-plugin-prometheus-sd') -%}
-      {%- set prom = data['prometheus-plugin-prometheus-sd'] -%}
+    {%- if data.get('prometheus-export-template') -%}
+      {%- set prom = data['prometheus-export-template'] -%}
       {%- set device_addr = target_addr(target.primary_ip.address.ip, prom.port)|trim -%}
 
       {#- Exporter routing. -#}
@@ -57,6 +57,10 @@
         {%- set param_target = None -%}
       {%- endif -%}
 
+      {#- Scrape interval / timeout overrides (emitted as Prometheus meta-labels). -#}
+      {%- set scrape_interval = target.cf.get('prometheus_exporter_scrape_interval') or prom.get('scrape_interval') -%}
+      {%- set scrape_timeout = target.cf.get('prometheus_exporter_scrape_timeout') or prom.get('scrape_timeout') -%}
+
       {#- Params with custom field override. -#}
       {%- set params_ns = namespace(parts=[]) -%}
       {%- set ctx_params = prom.get('params') or {} -%}
@@ -68,7 +72,9 @@
       {%- endfor -%}
 
       {#- Custom fields not covered by config context params. -#}
-      {%- set seen_keys = ctx_params.keys() | list -%}
+      {#- Keys handled out-of-band (not __param_*) are excluded from this sweep. -#}
+      {%- set reserved_cf_keys = ['scrape_interval', 'scrape_timeout'] -%}
+      {%- set seen_keys = (ctx_params.keys() | list) + reserved_cf_keys -%}
       {%- for cf_name, cf_value in target.cf.items() -%}
         {%- if cf_name.startswith('prometheus_exporter_') and cf_value -%}
           {%- set param_key = cf_name[20:] -%}
@@ -81,6 +87,8 @@
 
       {%- set fields = [
         ('__param_target', param_target),
+        ('__scrape_interval__', scrape_interval),
+        ('__scrape_timeout__', scrape_timeout),
       ] + params_ns.parts + [
         ('target_name', target.name),
         ('site', target.site.name if target.site else None),
