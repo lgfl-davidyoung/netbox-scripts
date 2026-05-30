@@ -227,7 +227,7 @@ Multi-select custom fields return lists, which the template CSV-joins automatica
 
 ### Services
 
-Services don't have config context; they have a `ports` field (a list). The service template emits one target per (service, port) pair, with labels inherited from the parent device or VM (`service.device or service.virtual_machine`). Additional labels: `service_name`, `service_protocol`.
+Services don't have config context; they have a `ports` field (a list). The service template emits one target per (service, port) pair, with labels inherited from the parent device or VM (NetBox 4.5+ exposes both via the `service.parent` GenericForeignKey accessor). Additional labels: `service_name`, `service_protocol`.
 
 Exporter routing for services pulls `exporter` / `scheme` / `params` from the *parent device's* `prometheus-export-template-services` context (falling back to `prometheus-export-template` if `-services` isn't set), using the service's port as the probe target. See "Service-level scrapes" above for details.
 

@@ -38,7 +38,9 @@
 
 {%- set ns = namespace(rows=[]) -%}
 {%- for service in queryset -%}
-  {%- set parent = service.device or service.virtual_machine -%}
+  {#- NetBox 4.5 replaced Service.device / Service.virtual_machine with a single
+      GenericForeignKey accessed as `service.parent`. -#}
+  {%- set parent = service.parent -%}
   {%- if parent and parent.status -%}
     {%- set data = parent.get_config_context() -%}
     {%- set prom_oob = data.get('prometheus-export-template-oob') -%}
