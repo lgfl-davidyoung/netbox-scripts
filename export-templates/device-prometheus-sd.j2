@@ -146,6 +146,7 @@
           ('__scheme__', scheme_label),
           ('__scrape_interval__', scrape_interval),
           ('__scrape_timeout__', scrape_timeout),
+          ('exporter_type', cfg.get('exporter_type')),
         ] + params_ns.parts + info_fields -%}
         {%- set ns.rows = ns.rows + [(scrape_target, fields)] -%}
       {%- endfor -%}

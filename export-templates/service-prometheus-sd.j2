@@ -123,6 +123,7 @@
         ('__metrics_path__', cfg.get('metrics_path')),
         ('__scrape_interval__', scrape_interval),
         ('__scrape_timeout__', scrape_timeout),
+        ('exporter_type', cfg.get('exporter_type')),
       ] -%}
 
       {%- for port in service.ports -%}
