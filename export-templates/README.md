@@ -90,7 +90,9 @@ Devices without an OOB IP populated skip the OOB row automatically. Devices that
 
 ## Service-level scrapes
 
-For application-level scrapes attached to a device via NetBox **Services** (e.g. multiple SNMP-monitored apps on different ports), use a third top-level key — `prometheus-export-template-services` — for the shared scrape config (typically the snmp_exporter address and auth):
+The service template always emits one row per (service, port) pair for active services on devices with a primary IP. By default rows are bare direct-scrape (info labels only).
+
+For application-level scrapes that should ride through an exporter (e.g. multiple SNMP-monitored apps on different ports), add a third top-level key — `prometheus-export-template-services` — to the parent device's context. The block supplies exporter routing, scheme, and shared params for every service on that device:
 
 ```json
 {
@@ -103,7 +105,7 @@ For application-level scrapes attached to a device via NetBox **Services** (e.g.
 }
 ```
 
-The service template uses this for emissions from `ipam.service` objects (one row per service port). If unset, it falls back to `prometheus-export-template` for backwards compatibility. Full details in [CLAUDE.md](CLAUDE.md#service-level-scrapes).
+This context is independent of `prometheus-export-template` and `prometheus-export-template-oob` — those drive device emission only. Full details in [CLAUDE.md](CLAUDE.md#service-level-scrapes).
 
 ## Per-device overrides
 

@@ -41,20 +41,21 @@
   {#- NetBox 4.5 replaced Service.device / Service.virtual_machine with a single
       GenericForeignKey accessed as `service.parent`. -#}
   {%- set parent = service.parent -%}
-  {%- if parent and parent.status -%}
-    {%- set data = parent.get_config_context() -%}
-    {%- set prom_oob = data.get('prometheus-export-template-oob') -%}
+  {%- if parent and parent.status and parent.primary_ip -%}
+    {#- Services always emit one row per port. The optional
+        `prometheus-export-template-services` context on the parent adds exporter
+        routing, scheme, metrics_path, params, and exporter_type on top. Without
+        it, services emit as bare direct-scrape rows with info labels only. -#}
+    {%- set prom = parent.get_config_context().get('prometheus-export-template-services') or {} -%}
+    {%- set exporter = prom.get('exporter') -%}
+    {%- set scheme = prom.get('scheme') or prom.get('target_scheme') -%}
 
-    {#- Resolve service-level scrape config in priority order:
-        1. Device context `prometheus-export-template-services` (shared service-level base).
-        2. Device context `prometheus-export-template` (backwards-compat fallback). -#}
-    {%- if data.get('prometheus-export-template-services') -%}
-      {%- set prom = data['prometheus-export-template-services'] -%}
-    {%- else -%}
-      {%- set prom = data.get('prometheus-export-template', {}) -%}
-    {%- endif -%}
+    {%- set params_ns = namespace(parts=[]) -%}
+    {%- for k, v in (prom.get('params') or {}).items() -%}
+      {%- set final = param_value(v)|trim -%}
+      {%- set params_ns.parts = params_ns.parts + [('__param_' ~ k, final)] -%}
+    {%- endfor -%}
 
-    {#- Shared info labels — identical across all emissions and ports of this service. -#}
     {%- set info_fields = [
       ('target_name', parent.name),
       ('service_name', service.name),
@@ -72,91 +73,30 @@
       ('description', parent.description if parent.description is defined and parent.description else None),
     ] -%}
 
-    {#- Build the list of (ip_obj, cfg, is_primary) emissions for this service's parent.
-        Primary: emit if parent has primary_ip (legacy behaviour — no `port` requirement
-                 since the service contributes its own ports).
-        OOB:     emit if `prometheus-export-template-oob` context is set on the parent
-                 and parent has `oob_ip`. VMs lack `oob_ip` — `is defined` guard skips
-                 them. -#}
-    {%- set emissions = namespace(items=[]) -%}
-    {%- if parent.primary_ip -%}
-      {%- set emissions.items = emissions.items + [(parent.primary_ip, prom, true)] -%}
-    {%- endif -%}
-    {%- if parent.oob_ip is defined and parent.oob_ip and prom_oob -%}
-      {%- set emissions.items = emissions.items + [(parent.oob_ip, prom_oob, false)] -%}
-    {%- endif -%}
-
-    {%- for source_ip_obj, cfg, is_primary in emissions.items -%}
-      {%- set exporter = cfg.get('exporter') -%}
-      {#- Scheme: prefixes __param_target when exporter routing is in use, emitted as
-          __scheme__ otherwise. `target_scheme` is kept as a legacy alias for `scheme`. -#}
-      {%- set scheme = cfg.get('scheme') or cfg.get('target_scheme') -%}
-
-      {#- Scrape interval / timeout — CFs only on primary. -#}
-      {%- if is_primary and parent.cf is defined -%}
-        {%- set scrape_interval = parent.cf.get('prometheus_exporter_scrape_interval') or cfg.get('scrape_interval') -%}
-        {%- set scrape_timeout = parent.cf.get('prometheus_exporter_scrape_timeout') or cfg.get('scrape_timeout') -%}
+    {%- for port in service.ports -%}
+      {%- set probe_addr = target_addr(parent.primary_ip.address.ip, port)|trim -%}
+      {%- if exporter -%}
+        {%- set scrape_target = exporter -%}
+        {%- if scheme -%}
+          {%- set param_target = scheme ~ '://' ~ probe_addr -%}
+        {%- else -%}
+          {%- set param_target = probe_addr -%}
+        {%- endif -%}
+        {%- set scheme_label = None -%}
       {%- else -%}
-        {%- set scrape_interval = cfg.get('scrape_interval') -%}
-        {%- set scrape_timeout = cfg.get('scrape_timeout') -%}
+        {%- set scrape_target = probe_addr -%}
+        {%- set param_target = None -%}
+        {%- set scheme_label = scheme -%}
       {%- endif -%}
-
-      {#- Params — CFs only on primary. -#}
-      {%- set params_ns = namespace(parts=[]) -%}
-      {%- set ctx_params = cfg.get('params') or {} -%}
-      {%- for k, v in ctx_params.items() -%}
-        {%- if is_primary and parent.cf is defined -%}
-          {%- set cf_value = parent.cf.get('prometheus_exporter_' ~ k) -%}
-          {%- set raw = cf_value if cf_value else v -%}
-        {%- else -%}
-          {%- set raw = v -%}
-        {%- endif -%}
-        {%- set final = param_value(raw)|trim -%}
-        {%- set params_ns.parts = params_ns.parts + [('__param_' ~ k, final)] -%}
-      {%- endfor -%}
-      {%- if is_primary and parent.cf is defined -%}
-        {#- Keys handled out-of-band (not __param_*) are excluded from this sweep. -#}
-        {%- set reserved_cf_keys = ['scrape_interval', 'scrape_timeout'] -%}
-        {%- set seen_keys = (ctx_params.keys() | list) + reserved_cf_keys -%}
-        {%- for cf_name, cf_value in parent.cf.items() -%}
-          {%- if cf_name.startswith('prometheus_exporter_') and cf_value -%}
-            {%- set param_key = cf_name[20:] -%}
-            {%- if param_key not in seen_keys -%}
-              {%- set final = param_value(cf_value)|trim -%}
-              {%- set params_ns.parts = params_ns.parts + [('__param_' ~ param_key, final)] -%}
-            {%- endif -%}
-          {%- endif -%}
-        {%- endfor -%}
-      {%- endif -%}
-
-      {%- set per_emission_fields = [
-        ('__metrics_path__', cfg.get('metrics_path')),
-        ('__scrape_interval__', scrape_interval),
-        ('__scrape_timeout__', scrape_timeout),
-        ('exporter_type', cfg.get('exporter_type')),
-      ] -%}
-
-      {%- for port in service.ports -%}
-        {%- set probe_addr = target_addr(source_ip_obj.address.ip, port)|trim -%}
-        {%- if exporter -%}
-          {%- set scrape_target = exporter -%}
-          {%- if scheme -%}
-            {%- set param_target = scheme ~ '://' ~ probe_addr -%}
-          {%- else -%}
-            {%- set param_target = probe_addr -%}
-          {%- endif -%}
-          {%- set scheme_label = None -%}
-        {%- else -%}
-          {%- set scrape_target = probe_addr -%}
-          {%- set param_target = None -%}
-          {%- set scheme_label = scheme -%}
-        {%- endif -%}
-        {%- set row_fields = [
-          ('__param_target', param_target),
-          ('__scheme__', scheme_label),
-        ] + per_emission_fields + params_ns.parts + info_fields -%}
-        {%- set ns.rows = ns.rows + [(scrape_target, row_fields)] -%}
-      {%- endfor -%}
+      {%- set row_fields = [
+        ('__param_target', param_target),
+        ('__scheme__', scheme_label),
+        ('__metrics_path__', prom.get('metrics_path')),
+        ('__scrape_interval__', prom.get('scrape_interval')),
+        ('__scrape_timeout__', prom.get('scrape_timeout')),
+        ('exporter_type', prom.get('exporter_type')),
+      ] + params_ns.parts + info_fields -%}
+      {%- set ns.rows = ns.rows + [(scrape_target, row_fields)] -%}
     {%- endfor -%}
   {%- endif -%}
 {%- endfor -%}
