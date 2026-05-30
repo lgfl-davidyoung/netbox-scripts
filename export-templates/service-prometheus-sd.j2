@@ -41,8 +41,16 @@
   {%- set parent = service.device or service.virtual_machine -%}
   {%- if parent and parent.status -%}
     {%- set data = parent.get_config_context() -%}
-    {%- set prom = data.get('prometheus-export-template', {}) -%}
     {%- set prom_oob = data.get('prometheus-export-template-oob') -%}
+
+    {#- Resolve service-level scrape config in priority order:
+        1. Device context `prometheus-export-template-services` (shared service-level base).
+        2. Device context `prometheus-export-template` (backwards-compat fallback). -#}
+    {%- if data.get('prometheus-export-template-services') -%}
+      {%- set prom = data['prometheus-export-template-services'] -%}
+    {%- else -%}
+      {%- set prom = data.get('prometheus-export-template', {}) -%}
+    {%- endif -%}
 
     {#- Shared info labels — identical across all emissions and ports of this service. -#}
     {%- set info_fields = [

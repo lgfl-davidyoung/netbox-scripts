@@ -88,6 +88,23 @@ NetBox merges both onto each device:
 
 Devices without an OOB IP populated skip the OOB row automatically. Devices that only need OOB monitoring can omit `prometheus-export-template` entirely. Custom-field overrides apply to the primary target only — the OOB context is self-contained. Full rules in [CLAUDE.md](CLAUDE.md#oob-ip-routing-idrac-bmcs).
 
+## Service-level scrapes
+
+For application-level scrapes attached to a device via NetBox **Services** (e.g. multiple SNMP-monitored apps on different ports), use a third top-level key — `prometheus-export-template-services` — for the shared scrape config (typically the snmp_exporter address and auth):
+
+```json
+{
+    "prometheus-export-template-services": {
+        "exporter_type": "snmp_exporter",
+        "exporter": "snmp-exporter.internal.lgfl.net:9116",
+        "scheme": "http",
+        "params": {"auth": "public_v2"}
+    }
+}
+```
+
+The service template uses this for emissions from `ipam.service` objects (one row per service port). If unset, it falls back to `prometheus-export-template` for backwards compatibility. Full details in [CLAUDE.md](CLAUDE.md#service-level-scrapes).
+
 ## Per-device overrides
 
 Set a custom field named `prometheus_exporter_<param>` on the device to override (or add) a single param without forking the config context. Multi-select custom fields are CSV-joined automatically.

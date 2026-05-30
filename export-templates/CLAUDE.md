@@ -47,9 +47,9 @@ Devices opt into discovery by having a `prometheus-export-template` key in their
 }
 ```
 
-The template reads `port`, `exporter_type`, `scheme`, `metrics_path`, `exporter`, `params`, `scrape_interval`, and `scrape_timeout` when present (see "Exporter routing", "Scheme", "Extra params", and "Scrape interval / timeout" below). `port` and `exporter_type` are required by the Config Context Profile schema. `target_scheme` is accepted as a deprecated alias for `scheme`. OOB monitoring is configured via a separate top-level `prometheus-export-template-oob` context (see "OOB IP routing" below).
+The template reads `port`, `exporter_type`, `scheme`, `metrics_path`, `exporter`, `params`, `scrape_interval`, and `scrape_timeout` when present (see "Exporter routing", "Scheme", "Extra params", and "Scrape interval / timeout" below). `port` and `exporter_type` are required by the Config Context Profile schema. `target_scheme` is accepted as a deprecated alias for `scheme`. OOB monitoring is configured via a separate top-level `prometheus-export-template-oob` context (see "OOB IP routing" below). Service-level monitoring (typically SNMP for app-level scrapes) uses a separate top-level `prometheus-export-template-services` context (see "Service-level scrapes" below).
 
-The primary-IP target is emitted only when both `prometheus-export-template` is present and `port` is set. Drop the `prometheus-export-template` context entirely on devices that only need OOB monitoring.
+The primary-IP target is emitted only when both `prometheus-export-template` is present and `port` is set. Drop the `prometheus-export-template` context entirely on devices that only need OOB or service-level monitoring.
 
 ### Exporter routing (snmp_exporter, fortigate_exporter, etc.)
 
@@ -180,6 +180,35 @@ NetBox merges all applicable contexts onto each device, so Linux-on-Dell, Window
 
 For services on a device whose parent has `prometheus-export-template-oob`, the service template emits an additional (service, port) row per port using the OOB IP. VMs don't have OOB IPs and skip the OOB branch automatically.
 
+### Service-level scrapes
+
+Many devices need application-level monitoring on top of (or instead of) the host scrape — for example a server running several SNMP-monitored applications on different ports (`161` for system MIBs, `1161` for App A, `2161` for App B). All these scrapes typically share one `snmp_exporter` address and authentication but cover different ports, which is exactly what NetBox **Services** model (a Service has a name, protocol, and one or more ports on a parent device or VM).
+
+The service template reads scrape configuration for service emissions from a separate top-level config-context key: `prometheus-export-template-services`. The schema mirrors the other two blocks except `port` is not required (services contribute their own ports).
+
+Example — a server with SNMP-monitored applications on three ports:
+
+```json
+{
+    "prometheus-export-template-services": {
+        "exporter_type": "snmp_exporter",
+        "exporter": "snmp-exporter.internal.lgfl.net:9116",
+        "scheme": "http",
+        "params": {"auth": "public_v2"}
+    }
+}
+```
+
+In NetBox you'd typically scope this where the SNMP exporter applies (per role, per site, or globally). Combine it with the role-scoped `prometheus-export-template` to get both host and service scrapes for the same device — e.g. a Linux server with node_exporter on its primary IP **and** multiple SNMP services for the apps it hosts.
+
+**Resolution order** for the `prom` value used by service emissions:
+
+1. `prometheus-export-template-services` on the parent's config context — used when set.
+2. `prometheus-export-template` on the parent's config context — backwards-compat fallback for existing setups that put their service scrape config in the primary block.
+3. Empty dict — direct-scrape per service port with no exporter routing.
+
+Currently the SNMP `module` (or any other param that varies per service) must live in the device-level context, meaning all services on the same device share params. Per-service overrides via a JSON custom field on `ipam.service` is a planned follow-up — until that lands, scope service-level differences by giving each device its own derived config context, or by tagging services that don't fit the device-level default.
+
 ### Custom field overrides
 
 For per-device overrides without forking a config context, set a custom field named `prometheus_exporter_<param>` on the device. It wins over the config context value for that one param. Custom fields with this prefix that don't have a matching context key are also picked up as fresh params.
@@ -200,7 +229,7 @@ Multi-select custom fields return lists, which the template CSV-joins automatica
 
 Services don't have config context; they have a `ports` field (a list). The service template emits one target per (service, port) pair, with labels inherited from the parent device or VM (`service.device or service.virtual_machine`). Additional labels: `service_name`, `service_protocol`.
 
-Exporter routing for services pulls `exporter` / `scheme` / `params` from the *parent device's* config context, using the service's port as the probe target.
+Exporter routing for services pulls `exporter` / `scheme` / `params` from the *parent device's* `prometheus-export-template-services` context (falling back to `prometheus-export-template` if `-services` isn't set), using the service's port as the probe target. See "Service-level scrapes" above for details.
 
 ## Labels emitted
 

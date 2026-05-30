@@ -1,6 +1,6 @@
 {
   "title": "Prometheus Export Template config context",
-  "description": "Schema for the prometheus-export-template and prometheus-export-template-oob config-context keys consumed by export-templates/device-prometheus-sd.j2 and service-prometheus-sd.j2. Upload this as the `schema` field of a NetBox ConfigContextProfile (Extras > Config Context Profiles > Add) and assign the profile to any ConfigContext that uses these keys.",
+  "description": "Schema for the prometheus-export-template, prometheus-export-template-oob, and prometheus-export-template-services config-context keys consumed by export-templates/device-prometheus-sd.j2 and service-prometheus-sd.j2. Upload this as the `schema` field of a NetBox ConfigContextProfile (Extras > Config Context Profiles > Add) and assign the profile to any ConfigContext that uses these keys.",
   "type": "object",
   "additionalProperties": true,
   "properties": {
@@ -11,19 +11,22 @@
     "prometheus-export-template-oob": {
       "$ref": "#/$defs/exportTemplateBlock",
       "description": "OOB (iDRAC/iLO/BMC) scrape configuration. Typically scoped per manufacturer (e.g. Dell -> idrac-exporter). Devices without an oob_ip populated skip the OOB row automatically."
+    },
+    "prometheus-export-template-services": {
+      "$ref": "#/$defs/exportTemplateBlockServiceBase",
+      "description": "Default scrape configuration for NetBox Services attached to this device (typically snmp_exporter). Service ports come from the Service's `ports` field, so `port` is not required here. Individual services can override this base via the `prometheus_export_template` JSON custom field on ipam.service."
     }
   },
   "$defs": {
-    "exportTemplateBlock": {
+    "exportTemplateBlockCommon": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["port", "exporter_type"],
       "properties": {
         "port": {
           "type": "integer",
           "minimum": 1,
           "maximum": 65535,
-          "description": "TCP port on the device or exporter target. Required — a block with no port emits no target."
+          "description": "TCP port on the device or exporter target. Required for primary and OOB blocks; ignored for the services block (services contribute their own ports)."
         },
         "exporter_type": {
           "type": "string",
@@ -78,6 +81,18 @@
           "description": "Per-target scrape timeout override (Prometheus duration string). Emitted as `__scrape_timeout__`. Must be less than `scrape_interval`."
         }
       }
+    },
+    "exportTemplateBlock": {
+      "allOf": [
+        {"$ref": "#/$defs/exportTemplateBlockCommon"},
+        {"required": ["port", "exporter_type"]}
+      ]
+    },
+    "exportTemplateBlockServiceBase": {
+      "allOf": [
+        {"$ref": "#/$defs/exportTemplateBlockCommon"},
+        {"required": ["exporter_type"]}
+      ]
     }
   }
 }
