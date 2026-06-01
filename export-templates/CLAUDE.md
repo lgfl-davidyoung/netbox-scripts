@@ -415,6 +415,7 @@ These all bit during the original development and the templates are written arou
 - **IPv6 needs brackets** — `[2001:db8::1]:9100`. `ip.version` reliably distinguishes (v4/v6 returns `4`/`6`).
 - **`target.device_type` only exists on Devices, not VMs** — guard with `is defined and ...` when handling parents that could be either.
 - **`target.role` vs `target.device_role`** — NetBox 4.x is `target.role`. Older versions used `device_role`.
+- **`get_config_context()` is expensive and uncached** — every call re-queries and merges all ConfigContexts (NetBox doesn't annotate the export-template queryset), so calling it per row is the dominant render cost. The service template memoizes all parent-derived data (config-context block, params, and the parent FK walk) by the GenericForeignKey columns (`parent_object_type_id` / `parent_object_id`), so each parent is computed once even when it has many service ports — and a cache hit skips resolving the `service.parent` GFK entirely. Keep this memo if editing; reverting to per-service `get_config_context()` makes the template crawl. The deeper fix (annotating the queryset) isn't reachable from a template.
 
 ## TODO / known gaps
 

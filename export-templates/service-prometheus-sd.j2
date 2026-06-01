@@ -37,49 +37,91 @@
 {%- endmacro -%}
 
 {%- set ns = namespace(rows=[]) -%}
+
+{#- Per-parent memo. Everything except the service name/protocol/ports/CF depends
+    only on the parent device/VM, but `get_config_context()` is NetBox's slow path
+    (it re-queries and merges every ConfigContext on each call) and the parent FK
+    walk (site/role/platform/device_type/manufacturer/…) repeats too. The common
+    case is many service ports on ONE server (e.g. SNMP on 161/1161/2161), so doing
+    that work once per service instead of once per parent is the whole cost.
+
+    Key on the GenericForeignKey columns (`parent_object_type_id`,
+    `parent_object_id`) rather than `service.parent`, so a cache hit doesn't even
+    resolve the GFK. `cache.items` is a list of (key, entry) — linear scan is fine
+    for the handful of distinct parents in any real queryset. -#}
+{%- set cache = namespace(items=[]) -%}
+
 {%- for service in queryset -%}
-  {#- NetBox 4.5 replaced Service.device / Service.virtual_machine with a single
-      GenericForeignKey accessed as `service.parent`. -#}
-  {%- set parent = service.parent -%}
-  {%- if parent and parent.status and parent.primary_ip -%}
-    {#- Services always emit one row per port. The optional
-        `prometheus-export-template-services` context on the parent adds exporter
-        routing, scheme, metrics_path, params, and exporter_type on top. Without
-        it, services emit as bare direct-scrape rows with info labels only. -#}
-    {%- set prom = parent.get_config_context().get('prometheus-export-template-services') or {} -%}
-    {%- set exporter = prom.get('exporter') -%}
-    {%- set scheme = prom.get('scheme') or prom.get('target_scheme') -%}
+  {%- set key = (service.parent_object_type_id|string) ~ ':' ~ (service.parent_object_id|string) -%}
 
-    {%- set params_ns = namespace(parts=[]) -%}
-    {%- for k, v in (prom.get('params') or {}).items() -%}
-      {%- set final = param_value(v)|trim -%}
-      {%- set params_ns.parts = params_ns.parts + [('__param_' ~ k, final)] -%}
-    {%- endfor -%}
+  {%- set lookup = namespace(entry=None) -%}
+  {%- for ck, cv in cache.items -%}
+    {%- if ck == key -%}{%- set lookup.entry = cv -%}{%- endif -%}
+  {%- endfor -%}
 
-    {%- set info_fields = [
-      ('target_name', parent.name),
+  {%- if lookup.entry is none -%}
+    {#- First service seen for this parent — resolve the GFK and derive everything. -#}
+    {%- set parent = service.parent -%}
+    {%- if parent and parent.status and parent.primary_ip -%}
+      {#- The optional `prometheus-export-template-services` context on the parent adds
+          exporter routing, scheme, metrics_path, params, and exporter_type on top.
+          Without it, services emit as bare direct-scrape rows with info labels only. -#}
+      {%- set prom = parent.get_config_context().get('prometheus-export-template-services') or {} -%}
+
+      {%- set params_ns = namespace(parts=[]) -%}
+      {%- for k, v in (prom.get('params') or {}).items() -%}
+        {%- set final = param_value(v)|trim -%}
+        {%- set params_ns.parts = params_ns.parts + [('__param_' ~ k, final)] -%}
+      {%- endfor -%}
+
+      {%- set parent_info = [
+        ('target_name', parent.name),
+        ('site', parent.site.name if parent.site else None),
+        ('dc', parent.site.slug if parent.site else None),
+        ('cluster', parent.cluster.name if parent.cluster else None),
+        ('tenant', parent.tenant.name if parent.tenant else None),
+        ('device_role', parent.role.name if parent.role else None),
+        ('platform', parent.platform.name if parent.platform else None),
+        ('manufacturer', parent.device_type.manufacturer.name if parent.device_type is defined and parent.device_type and parent.device_type.manufacturer else None),
+        ('device_type', parent.device_type.model if parent.device_type is defined and parent.device_type else None),
+        ('location', parent.location.name if parent.location is defined and parent.location else None),
+        ('rack', parent.rack.name if parent.rack is defined and parent.rack else None),
+        ('description', parent.description if parent.description is defined and parent.description else None),
+      ] -%}
+
+      {%- set lookup.entry = {
+        'ok': true,
+        'ip': parent.primary_ip.address.ip,
+        'exporter': prom.get('exporter'),
+        'scheme': prom.get('scheme') or prom.get('target_scheme'),
+        'metrics_path': prom.get('metrics_path'),
+        'scrape_interval': prom.get('scrape_interval'),
+        'scrape_timeout': prom.get('scrape_timeout'),
+        'exporter_type': prom.get('exporter_type'),
+        'param_parts': params_ns.parts,
+        'info': parent_info,
+      } -%}
+    {%- else -%}
+      {#- Inactive / no primary_ip — cache the skip so sibling services don't re-resolve. -#}
+      {%- set lookup.entry = {'ok': false} -%}
+    {%- endif -%}
+    {%- set cache.items = cache.items + [(key, lookup.entry)] -%}
+  {%- endif -%}
+
+  {%- set entry = lookup.entry -%}
+  {%- if entry.ok -%}
+    {#- Per-service labels (the only things that vary between services on one parent). -#}
+    {%- set svc_fields = [
       ('service_name', service.name),
       ('service_protocol', service.protocol),
-      ('site', parent.site.name if parent.site else None),
-      ('dc', parent.site.slug if parent.site else None),
-      ('cluster', parent.cluster.name if parent.cluster else None),
-      ('tenant', parent.tenant.name if parent.tenant else None),
-      ('device_role', parent.role.name if parent.role else None),
-      ('platform', parent.platform.name if parent.platform else None),
-      ('manufacturer', parent.device_type.manufacturer.name if parent.device_type is defined and parent.device_type and parent.device_type.manufacturer else None),
-      ('device_type', parent.device_type.model if parent.device_type is defined and parent.device_type else None),
-      ('location', parent.location.name if parent.location is defined and parent.location else None),
-      ('rack', parent.rack.name if parent.rack is defined and parent.rack else None),
-      ('description', parent.description if parent.description is defined and parent.description else None),
       ('disable_alerts', 'true' if service.cf.get('monitoring_disable_alerts') else None),
     ] -%}
-
     {%- for port in service.ports -%}
-      {%- set probe_addr = target_addr(parent.primary_ip.address.ip, port)|trim -%}
-      {%- if exporter -%}
-        {%- set scrape_target = exporter -%}
-        {%- if scheme -%}
-          {%- set param_target = scheme ~ '://' ~ probe_addr -%}
+      {%- set probe_addr = target_addr(entry.ip, port)|trim -%}
+      {%- if entry.exporter -%}
+        {%- set scrape_target = entry.exporter -%}
+        {%- if entry.scheme -%}
+          {%- set param_target = entry.scheme ~ '://' ~ probe_addr -%}
         {%- else -%}
           {%- set param_target = probe_addr -%}
         {%- endif -%}
@@ -87,16 +129,16 @@
       {%- else -%}
         {%- set scrape_target = probe_addr -%}
         {%- set param_target = None -%}
-        {%- set scheme_label = scheme -%}
+        {%- set scheme_label = entry.scheme -%}
       {%- endif -%}
       {%- set row_fields = [
         ('__param_target', param_target),
         ('__scheme__', scheme_label),
-        ('__metrics_path__', prom.get('metrics_path')),
-        ('__scrape_interval__', prom.get('scrape_interval')),
-        ('__scrape_timeout__', prom.get('scrape_timeout')),
-        ('exporter_type', prom.get('exporter_type')),
-      ] + params_ns.parts + info_fields -%}
+        ('__metrics_path__', entry.metrics_path),
+        ('__scrape_interval__', entry.scrape_interval),
+        ('__scrape_timeout__', entry.scrape_timeout),
+        ('exporter_type', entry.exporter_type),
+      ] + entry.param_parts + entry.info + svc_fields -%}
       {%- set ns.rows = ns.rows + [(scrape_target, row_fields)] -%}
     {%- endfor -%}
   {%- endif -%}
