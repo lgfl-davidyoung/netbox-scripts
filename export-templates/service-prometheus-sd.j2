@@ -71,6 +71,7 @@
       ('location', parent.location.name if parent.location is defined and parent.location else None),
       ('rack', parent.rack.name if parent.rack is defined and parent.rack else None),
       ('description', parent.description if parent.description is defined and parent.description else None),
+      ('disable_alerts', 'true' if service.cf.get('monitoring_disable_alerts') else None),
     ] -%}
 
     {%- for port in service.ports -%}

@@ -1,0 +1,82 @@
+{
+  "title": "Prometheus Export Template — service scrape config context",
+  "description": "Config Context Profile for the `prometheus-export-template-services` key consumed by export-templates/service-prometheus-sd.j2. Default scrape configuration for NetBox Services attached to this device (typically snmp_exporter). Service ports come from the Service's `ports` field, so `port` is not required here. Individual services can override this base via the `prometheus_export_template` JSON custom field on ipam.service. Upload this as the `schema` field of a NetBox ConfigContextProfile (Extras > Config Context Profiles > Add) and assign the profile to any ConfigContext that sets `prometheus-export-template-services`.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["prometheus-export-template-services"],
+  "properties": {
+    "prometheus-export-template-services": {
+      "allOf": [
+        {"$ref": "#/$defs/exportTemplateBlockCommon"},
+        {"required": ["exporter_type"]}
+      ],
+      "description": "Default scrape configuration for NetBox Services attached to this device (typically snmp_exporter). Service ports come from the Service's `ports` field, so `port` is not required here."
+    }
+  },
+  "$defs": {
+    "exportTemplateBlockCommon": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Ignored for the services block — services contribute their own ports from the Service's `ports` field."
+        },
+        "exporter_type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identifier for the exporter that ultimately produces these metrics — emitted as the `exporter_type` label so dashboards/alerts can filter by exporter family. Required. Recommended values: `node_exporter`, `windows_exporter`, `snmp_exporter`, `fortigate_exporter`, `idrac_exporter`, `ilo_exporter`, `blackbox_exporter`."
+        },
+        "scheme": {
+          "type": "string",
+          "enum": ["http", "https"],
+          "description": "Protocol used to reach the device. With `exporter` set, scheme prefixes `__param_target` so the exporter knows what protocol to probe. Without `exporter`, scheme is emitted as the Prometheus `__scheme__` meta-label, overriding the scrape job default."
+        },
+        "target_scheme": {
+          "type": "string",
+          "enum": ["http", "https"],
+          "deprecated": true,
+          "description": "Deprecated alias for `scheme`. Continues to work for backwards compatibility; prefer `scheme` in new contexts."
+        },
+        "metrics_path": {
+          "type": "string",
+          "pattern": "^/.*",
+          "description": "Path the metrics endpoint is served on. Emitted as the Prometheus `__metrics_path__` meta-label."
+        },
+        "exporter": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional exporter `host:port` that scrapes the service on your behalf (snmp_exporter, fortigate_exporter, etc.). When set, the exporter becomes `__address__` and the service address moves to `__param_target` so the exporter receives it as a URL parameter."
+        },
+        "params": {
+          "type": "object",
+          "description": "Additional URL parameters passed to the exporter. Each key becomes a `__param_<key>` label. List values are CSV-joined (e.g. snmp_exporter modules).",
+          "additionalProperties": {
+            "anyOf": [
+              {"type": "string"},
+              {"type": "integer"},
+              {"type": "boolean"},
+              {"type": "null"},
+              {
+                "type": "array",
+                "items": {"type": ["string", "integer", "boolean"]}
+              }
+            ]
+          }
+        },
+        "scrape_interval": {
+          "type": "string",
+          "pattern": "^[0-9]+(ms|s|m|h|d|w|y)( *[0-9]+(ms|s|m|h|d|w|y))*$",
+          "description": "Per-target scrape interval override (Prometheus duration string, e.g. \"30s\", \"1m\", \"2m30s\"). Emitted as `__scrape_interval__`."
+        },
+        "scrape_timeout": {
+          "type": "string",
+          "pattern": "^[0-9]+(ms|s|m|h|d|w|y)( *[0-9]+(ms|s|m|h|d|w|y))*$",
+          "description": "Per-target scrape timeout override (Prometheus duration string). Emitted as `__scrape_timeout__`. Must be less than `scrape_interval`."
+        }
+      }
+    }
+  }
+}

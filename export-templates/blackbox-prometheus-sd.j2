@@ -146,8 +146,9 @@
       {%- set mods.list = [row.default] -%}
     {%- endif -%}
 
+    {%- set disable_alerts = 'true' if obj.cf.get('monitoring_disable_alerts') else None -%}
     {%- for module in mods.list -%}
-      {%- set row_fields = [('module', module)] + row.fields -%}
+      {%- set row_fields = [('module', module), ('disable_alerts', disable_alerts)] + row.fields -%}
       {%- set ns.rows = ns.rows + [(row.addr, row_fields)] -%}
     {%- endfor -%}
   {%- endif -%}

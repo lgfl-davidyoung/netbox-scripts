@@ -10,7 +10,7 @@ NetBox export templates that emit Prometheus `http_sd_config` JSON. Two for expo
 
 The three files [blackbox-device-vm-sd.j2](blackbox-device-vm-sd.j2), [blackbox-service-sd.j2](blackbox-service-sd.j2), and [blackbox-ipaddress-sd.j2](blackbox-ipaddress-sd.j2) are deprecated — they were the first iteration of blackbox support and have been replaced by the single consolidated template above. They remain in the tree temporarily and can be removed once the consolidated template is verified working.
 
-See [CLAUDE.md](CLAUDE.md) for the full data model, label reference, exporter-routing rules, and Jinja gotchas. A NetBox-compatible JSON Schema for the config-context shape lives at [prometheus-export-template.schema.json](prometheus-export-template.schema.json) — upload it as a Config Context Profile (Extras → Config Context Profiles → Add) to get validation in the NetBox UI.
+See [CLAUDE.md](CLAUDE.md) for the full data model, label reference, exporter-routing rules, and Jinja gotchas. Each config-context key has its own NetBox-compatible Config Context Profile — [profile-prometheus-export-template.json](profile-prometheus-export-template.json), [profile-prometheus-export-template-oob.json](profile-prometheus-export-template-oob.json), and [profile-prometheus-export-template-services.json](profile-prometheus-export-template-services.json). Upload each as a Config Context Profile (Extras → Config Context Profiles → Add) and assign it to the ConfigContexts that set the matching key, to get validation in the NetBox UI.
 
 ## Install
 

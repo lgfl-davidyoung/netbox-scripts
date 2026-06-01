@@ -58,6 +58,7 @@
         ('location', target.location.name if target.location else None),
         ('rack', target.rack.name if target.rack else None),
         ('description', target.description if target.description else None),
+        ('disable_alerts', 'true' if target.cf.get('monitoring_disable_alerts') else None),
       ] -%}
 
       {#- Build the list of (ip_obj, cfg, is_primary) emissions for this device.

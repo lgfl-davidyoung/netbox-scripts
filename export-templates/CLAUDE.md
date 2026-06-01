@@ -217,6 +217,16 @@ Examples:
 
 Multi-select custom fields return lists, which the template CSV-joins automatically. Text custom fields containing commas pass through unchanged.
 
+### Alert suppression (`monitoring_disable_alerts`)
+
+A separate boolean custom field `monitoring_disable_alerts` (note the `monitoring_` prefix — it is **not** part of the `prometheus_exporter_*` param family) emits the `disable_alerts` label on every row for that object. When the CF is set/truthy the label is emitted as `disable_alerts="true"`; when unset or false the label is omitted entirely (alert rules should treat "absent" as "alert normally"). All three live templates honour it:
+
+- **Device template** — read from the device; applies to both the primary and OOB rows (shared info labels).
+- **Service template** — read from the Service object itself (not the parent device), so suppression is per-service.
+- **Blackbox template** — read from the iterated object (device/VM/IP/service), one `disable_alerts` value per object applied to every module row.
+
+Consume it in Alertmanager/alert rules by matching the label, e.g. `... unless on(instance) up{disable_alerts="true"}` or an inhibition rule keyed on `disable_alerts`.
+
 ### Services
 
 Services don't have config context; they have a `ports` field (a list). The service template emits one target per (service, port) pair, with labels inherited from the parent device or VM (NetBox 4.5+ exposes both via the `service.parent` GenericForeignKey accessor). Additional labels: `service_name`, `service_protocol`.
@@ -243,6 +253,7 @@ Shared labels (identical on primary and OOB rows for the same device):
 | `location`         | location.name (devices only)    |
 | `rack`             | rack.name (devices only)        |
 | `description`     | description field               |
+| `disable_alerts`   | `"true"` when the `monitoring_disable_alerts` custom field is set on the device (services: on the service); omitted otherwise |
 
 Per-target labels (differ between primary and OOB rows — each block has its own values):
 
@@ -311,6 +322,7 @@ All blackbox rows carry `module` (regular label, swapped to `__param_module` by 
 | `site`, `dc`, `cluster`, `device_role`, `platform` | ✓ | — | ✓ (from parent) |
 | `manufacturer`, `device_type`, `location`, `rack` | ✓ (devices only — guarded `is defined` for VMs) | — | ✓ (from parent, same guard) |
 | `tenant`, `description` | ✓ | ✓ | ✓ |
+| `disable_alerts` | ✓ | ✓ | ✓ (from the service object) |
 
 IP addresses don't carry site/role labels — they aren't directly associated with those. If an IP is interface-assigned and you need site/role on the probe row, scrape via the device/VM endpoint instead.
 
@@ -421,7 +433,9 @@ These all bit during the original development and the templates are written arou
 ├── blackbox-device-vm-sd.j2           # deprecated — superseded by blackbox-prometheus-sd.j2
 ├── blackbox-service-sd.j2             # deprecated — superseded by blackbox-prometheus-sd.j2
 ├── blackbox-ipaddress-sd.j2           # deprecated — superseded by blackbox-prometheus-sd.j2
-├── prometheus-export-template.schema.json   # Config Context Profile schema
+├── profile-prometheus-export-template.json           # Config Context Profile for the primary key
+├── profile-prometheus-export-template-oob.json       # Config Context Profile for the -oob key
+├── profile-prometheus-export-template-services.json  # Config Context Profile for the -services key
 ├── prometheus/
 │   └── scrape-configs.yml             # example prometheus.yml fragment
 └── README.md                          # human-facing overview
