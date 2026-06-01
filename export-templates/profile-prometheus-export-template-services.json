@@ -6,11 +6,8 @@
   "required": ["prometheus-export-template-services"],
   "properties": {
     "prometheus-export-template-services": {
-      "allOf": [
-        {"$ref": "#/$defs/exportTemplateBlockCommon"},
-        {"required": ["exporter_type"]}
-      ],
-      "description": "Default scrape configuration for NetBox Services attached to this device (typically snmp_exporter). Service ports come from the Service's `ports` field, so `port` is not required here."
+      "$ref": "#/$defs/exportTemplateBlockCommon",
+      "description": "Default scrape configuration for NetBox Services attached to this device (typically snmp_exporter). Service ports come from the Service's `ports` field, so `port` is not required here. All fields are optional."
     }
   },
   "$defs": {
@@ -27,7 +24,7 @@
         "exporter_type": {
           "type": "string",
           "minLength": 1,
-          "description": "Identifier for the exporter that ultimately produces these metrics — emitted as the `exporter_type` label so dashboards/alerts can filter by exporter family. Required. Recommended values: `node_exporter`, `windows_exporter`, `snmp_exporter`, `fortigate_exporter`, `idrac_exporter`, `ilo_exporter`, `blackbox_exporter`."
+          "description": "Identifier for the exporter that ultimately produces these metrics — emitted as the `exporter_type` label so dashboards/alerts can filter by exporter family. Optional; when omitted, no `exporter_type` label is emitted. Recommended values: `node_exporter`, `windows_exporter`, `snmp_exporter`, `fortigate_exporter`, `idrac_exporter`, `ilo_exporter`, `blackbox_exporter`."
         },
         "scheme": {
           "type": "string",

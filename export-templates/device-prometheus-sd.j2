@@ -141,8 +141,13 @@
           {%- endfor -%}
         {%- endif -%}
 
+        {#- With exporter routing __address__ is the exporter, so Prometheus' default
+            instance (=__address__) would collide across every target behind that
+            exporter. Emit instance = the probed device address (param_target is set
+            only when an exporter is in use; build_labels drops it otherwise). -#}
         {%- set fields = [
           ('__param_target', param_target),
+          ('instance', param_target),
           ('__metrics_path__', cfg.get('metrics_path')),
           ('__scheme__', scheme_label),
           ('__scrape_interval__', scrape_interval),

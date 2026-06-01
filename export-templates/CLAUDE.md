@@ -47,7 +47,7 @@ Devices opt into discovery by having a `prometheus-export-template` key in their
 }
 ```
 
-The template reads `port`, `exporter_type`, `scheme`, `metrics_path`, `exporter`, `params`, `scrape_interval`, and `scrape_timeout` when present (see "Exporter routing", "Scheme", "Extra params", and "Scrape interval / timeout" below). `port` and `exporter_type` are required by the Config Context Profile schema. `target_scheme` is accepted as a deprecated alias for `scheme`. OOB monitoring is configured via a separate top-level `prometheus-export-template-oob` context (see "OOB IP routing" below). Service-level monitoring (typically SNMP for app-level scrapes) uses a separate top-level `prometheus-export-template-services` context (see "Service-level scrapes" below).
+The template reads `port`, `exporter_type`, `scheme`, `metrics_path`, `exporter`, `params`, `scrape_interval`, and `scrape_timeout` when present (see "Exporter routing", "Scheme", "Extra params", and "Scrape interval / timeout" below). `port` is the only field required by the Config Context Profile schema (for the primary and OOB blocks); `exporter_type` is optional — when omitted, no `exporter_type` label is emitted. `target_scheme` is accepted as a deprecated alias for `scheme`. OOB monitoring is configured via a separate top-level `prometheus-export-template-oob` context (see "OOB IP routing" below). Service-level monitoring (typically SNMP for app-level scrapes) uses a separate top-level `prometheus-export-template-services` context (see "Service-level scrapes" below).
 
 The primary-IP target is emitted only when both `prometheus-export-template` is present and `port` is set. Drop the `prometheus-export-template` context entirely on devices that only need OOB or service-level monitoring.
 
@@ -259,15 +259,16 @@ Per-target labels (differ between primary and OOB rows — each block has its ow
 
 | Label                 | Source                          |
 |-----------------------|---------------------------------|
-| `exporter_type`       | block's `exporter_type` key — identifies the exporter family (`node_exporter`, `snmp_exporter`, `idrac_exporter`, etc.). Required by the schema. |
+| `exporter_type`       | block's `exporter_type` key — identifies the exporter family (`node_exporter`, `snmp_exporter`, `idrac_exporter`, etc.). Optional; omitted when unset. |
 | `__param_<name>`      | block's `params` dict, or `prometheus_exporter_*` custom fields (primary only) |
 | `__param_target`      | device IP when `exporter` is set (with optional `scheme` prefix) |
+| `instance`            | mirror of `__param_target` — emitted only when `exporter` is set, so targets behind a shared exporter don't collide on the default `instance` (=`__address__`=exporter). Omitted on direct-scrape rows (Prometheus' `__address__` default is already correct). |
 | `__metrics_path__`    | block's `metrics_path` key      |
 | `__scheme__`          | block's `scheme` key — emitted only when no `exporter` is set (otherwise scheme is baked into `__param_target`) |
 | `__scrape_interval__` | block's `scrape_interval` key, or `prometheus_exporter_scrape_interval` CF (primary only) |
 | `__scrape_timeout__`  | block's `scrape_timeout` key, or `prometheus_exporter_scrape_timeout` CF (primary only) |
 
-`__param_*` labels are stripped by Prometheus after relabel (they're meta-labels). To preserve the probed address as a regular label on metrics, the Prometheus relabel config should copy `__param_target` to `instance` or similar — see "Prometheus relabel config" below. `__metrics_path__`, `__scrape_interval__`, `__scrape_timeout__` are also Prometheus meta-labels consumed natively — no relabel rule needed.
+`__param_*` labels are stripped by Prometheus after relabel (they're meta-labels). To preserve the probed address as a regular label on metrics, the device and service templates now emit `instance` directly (= `__param_target`) on exporter-routed rows, so the older "copy `__param_target` to `instance`" relabel rule is no longer required (keeping it is harmless — same value). `__metrics_path__`, `__scrape_interval__`, `__scrape_timeout__` are also Prometheus meta-labels consumed natively — no relabel rule needed.
 
 ## Blackbox probes
 
@@ -392,7 +393,9 @@ relabel_configs:
     target_label: device_type
 ```
 
-Note: the templates emit these labels directly (not via `__meta_netbox_*`), so the relabel above is from the older `netbox-plugin-prometheus-sd` shape. With the current export templates the labels arrive pre-named and no relabel is strictly required — but if you want to preserve `instance` as the probed device address when exporter routing is in use:
+Note: the templates emit these labels directly (not via `__meta_netbox_*`), so the relabel above is from the older `netbox-plugin-prometheus-sd` shape. With the current export templates the labels arrive pre-named and no relabel is strictly required.
+
+`instance` is likewise emitted directly by the device and service templates on exporter-routed rows (= `__param_target`), so the probed address is preserved without any relabel. The equivalent rule is only needed if you're still on the older SD shape:
 
 ```yaml
 relabel_configs:

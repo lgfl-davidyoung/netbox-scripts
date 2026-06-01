@@ -42,7 +42,7 @@ Add a config context (device, role, site, tenant, etc.) containing:
 }
 ```
 
-`port` and `exporter_type` are required by the Config Context Profile schema. `exporter_type` becomes a label on every emitted target so queries can filter by exporter family (`up{exporter_type="node_exporter"}`).
+`port` is required by the Config Context Profile schema; `exporter_type` is optional. When set, `exporter_type` becomes a label on every emitted target so queries can filter by exporter family (`up{exporter_type="node_exporter"}`); when omitted, no such label is emitted.
 
 Devices without this key are silently skipped, so it's safe to scope the context broadly.
 

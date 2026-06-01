@@ -8,7 +8,7 @@
     "prometheus-export-template": {
       "allOf": [
         {"$ref": "#/$defs/exportTemplateBlockCommon"},
-        {"required": ["port", "exporter_type"]}
+        {"required": ["port"]}
       ],
       "description": "Primary scrape configuration. Typically scoped per role/OS. Omit on devices that only need OOB or service-level monitoring."
     }
@@ -27,7 +27,7 @@
         "exporter_type": {
           "type": "string",
           "minLength": 1,
-          "description": "Identifier for the exporter that ultimately produces these metrics — emitted as the `exporter_type` label so dashboards/alerts can filter by exporter family. Required. Recommended values: `node_exporter`, `windows_exporter`, `snmp_exporter`, `fortigate_exporter`, `idrac_exporter`, `ilo_exporter`, `blackbox_exporter`."
+          "description": "Identifier for the exporter that ultimately produces these metrics — emitted as the `exporter_type` label so dashboards/alerts can filter by exporter family. Optional; when omitted, no `exporter_type` label is emitted. Recommended values: `node_exporter`, `windows_exporter`, `snmp_exporter`, `fortigate_exporter`, `idrac_exporter`, `ilo_exporter`, `blackbox_exporter`."
         },
         "scheme": {
           "type": "string",

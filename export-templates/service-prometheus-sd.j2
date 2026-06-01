@@ -131,8 +131,12 @@
         {%- set param_target = None -%}
         {%- set scheme_label = entry.scheme -%}
       {%- endif -%}
+      {#- With exporter routing __address__ is the exporter, so emit instance = the
+          probed service address to keep targets distinct (param_target is set only
+          when an exporter is in use; build_labels drops it otherwise). -#}
       {%- set row_fields = [
         ('__param_target', param_target),
+        ('instance', param_target),
         ('__scheme__', scheme_label),
         ('__metrics_path__', entry.metrics_path),
         ('__scrape_interval__', entry.scrape_interval),
