@@ -36,7 +36,7 @@ scrape_configs:
   - job_name: netbox-blackbox-devices
     metrics_path: /probe
     http_sd_configs:
-      - url: https://netbox-dev.internal.lgfl.net/api/dcim/devices/?export=blackbox-device-vm
+      - url: https://netbox-dev.internal.lgfl.net/api/dcim/devices/?export=blackbox-prometheus-sd
         authorization:
           type: "Token"
           credentials: "lOG6F4fhi551ZzbzeY1gPLFmejXx7HAjwQ49lDcG"
@@ -53,7 +53,7 @@ scrape_configs:
   - job_name: netbox-blackbox-vms
     metrics_path: /probe
     http_sd_configs:
-      - url: https://netbox-dev.internal.lgfl.net/api/virtualization/virtual-machines/?export=blackbox-device-vm
+      - url: https://netbox-dev.internal.lgfl.net/api/virtualization/virtual-machines/?export=blackbox-prometheus-sd
         authorization:
           type: "Token"
           credentials: "lOG6F4fhi551ZzbzeY1gPLFmejXx7HAjwQ49lDcG"
@@ -62,7 +62,7 @@ scrape_configs:
   - job_name: netbox-blackbox-services
     metrics_path: /probe
     http_sd_configs:
-      - url: https://netbox-dev.internal.lgfl.net/api/ipam/services/?export=blackbox-service
+      - url: https://netbox-dev.internal.lgfl.net/api/ipam/services/?export=blackbox-prometheus-sd
         authorization:
           type: "Token"
           credentials: "lOG6F4fhi551ZzbzeY1gPLFmejXx7HAjwQ49lDcG"
@@ -71,7 +71,7 @@ scrape_configs:
   - job_name: netbox-blackbox-ipaddresses
     metrics_path: /probe
     http_sd_configs:
-      - url: https://netbox-dev.internal.lgfl.net/api/ipam/ip-addresses/?export=blackbox-ipaddress
+      - url: https://netbox-dev.internal.lgfl.net/api/ipam/ip-addresses/?export=blackbox-prometheus-sd
         authorization:
           type: "Token"
           credentials: "lOG6F4fhi551ZzbzeY1gPLFmejXx7HAjwQ49lDcG"

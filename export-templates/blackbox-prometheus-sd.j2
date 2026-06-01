@@ -1,0 +1,162 @@
+{#-
+  Prometheus HTTP SD export template — Blackbox probes (consolidated).
+
+  Bind to ALL of:
+    - dcim.device
+    - virtualization.virtualmachine
+    - ipam.service
+    - ipam.ipaddress
+
+  One template, four content types. The same render endpoint URL serves all
+  four; NetBox renders this template against the queryset implied by the URL
+  (e.g. /api/ipam/services/ → service queryset). Per-row dispatch picks the
+  right derivation flow via `is defined` attribute checks:
+
+    - Service  : obj has `ports`
+    - IPAddress: obj has `dns_name` (and not `ports`)
+    - Device/VM: obj has `primary_ip` (and not the above)
+
+  Emission is unconditional — every active object with a usable address
+  appears. Narrow at the SD URL with `&tag=<tag>` if you only want a subset
+  probed.
+
+  Modules come from the `prometheus_exporter_modules` custom field
+  (multi-select or text). One row per module. Defaults when unset:
+    - Service    → http_2xx (most services in the fleet are HTTP-facing)
+    - Device/VM/IP → icmp
+
+  Pair with the canonical blackbox relabel block in scrape-configs.yml.
+-#}
+
+{%- macro jstr(s) -%}
+{{ s|string|replace('\\', '\\\\')|replace('"', '\\"')|replace('\n', '\\n')|replace('\r', '\\r')|replace('\t', '\\t') }}
+{%- endmacro -%}
+
+{%- macro build_labels(fields) -%}
+  {%- set lbl = namespace(parts=[]) -%}
+  {%- for name, value in fields -%}
+    {%- if value -%}
+      {%- set lbl.parts = lbl.parts + ['"' ~ name ~ '": "' ~ jstr(value)|trim ~ '"'] -%}
+    {%- endif -%}
+  {%- endfor -%}
+  { {{ lbl.parts | join(', ') }} }
+{%- endmacro -%}
+
+{%- macro target_addr(ip, port) -%}
+  {%- if ip.version == 6 -%}
+    [{{ ip }}]:{{ port }}
+  {%- else -%}
+    {{ ip }}:{{ port }}
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- set ns = namespace(rows=[]) -%}
+{%- for obj in queryset -%}
+
+  {#- Per-row dispatch yields (probe_addr, info_fields, default_module, ok).
+      `ok` is false when the row can't be probed (missing address, etc.). -#}
+  {%- set row = namespace(addr=None, fields=[], default='icmp', ok=false) -%}
+
+  {%- if obj.ports is defined -%}
+    {#- ====================== Service ====================== -#}
+    {%- set parent = obj.parent -%}
+    {%- if parent and parent.status and parent.primary_ip and obj.ports -%}
+      {%- set row.addr = target_addr(parent.primary_ip.address.ip, obj.ports[0])|trim -%}
+      {%- set row.default = 'http_2xx' -%}
+      {%- set row.fields = [
+        ('target_name', parent.name),
+        ('service_name', obj.name),
+        ('service_protocol', obj.protocol),
+        ('site', parent.site.name if parent.site else None),
+        ('dc', parent.site.slug if parent.site else None),
+        ('cluster', parent.cluster.name if parent.cluster else None),
+        ('tenant', parent.tenant.name if parent.tenant else None),
+        ('device_role', parent.role.name if parent.role else None),
+        ('platform', parent.platform.name if parent.platform else None),
+        ('manufacturer', parent.device_type.manufacturer.name if parent.device_type is defined and parent.device_type and parent.device_type.manufacturer else None),
+        ('device_type', parent.device_type.model if parent.device_type is defined and parent.device_type else None),
+        ('location', parent.location.name if parent.location is defined and parent.location else None),
+        ('rack', parent.rack.name if parent.rack is defined and parent.rack else None),
+        ('description', parent.description if parent.description is defined and parent.description else None),
+      ] -%}
+      {%- set row.ok = true -%}
+    {%- endif -%}
+
+  {%- elif obj.dns_name is defined -%}
+    {#- ====================== IPAddress ====================== -#}
+    {%- if obj.status and obj.address -%}
+      {%- set row.addr = obj.address.ip|string -%}
+      {%- set row.default = 'icmp' -%}
+
+      {#- target_name: walk the assigned object to find a useful name. -#}
+      {%- set assigned = obj.assigned_object -%}
+      {%- set name_ns = namespace(value=None) -%}
+      {%- if assigned -%}
+        {%- if assigned.device is defined and assigned.device -%}
+          {%- set name_ns.value = assigned.device.name -%}
+        {%- elif assigned.virtual_machine is defined and assigned.virtual_machine -%}
+          {%- set name_ns.value = assigned.virtual_machine.name -%}
+        {%- elif assigned.name is defined -%}
+          {%- set name_ns.value = assigned.name -%}
+        {%- endif -%}
+      {%- endif -%}
+
+      {%- set row.fields = [
+        ('target_name', name_ns.value),
+        ('dns_name', obj.dns_name if obj.dns_name else None),
+        ('tenant', obj.tenant.name if obj.tenant else None),
+        ('description', obj.description if obj.description else None),
+      ] -%}
+      {%- set row.ok = true -%}
+    {%- endif -%}
+
+  {%- elif obj.primary_ip is defined -%}
+    {#- ====================== Device / VM ====================== -#}
+    {%- if obj.status and obj.primary_ip -%}
+      {%- set row.addr = obj.primary_ip.address.ip|string -%}
+      {%- set row.default = 'icmp' -%}
+      {%- set row.fields = [
+        ('target_name', obj.name),
+        ('site', obj.site.name if obj.site else None),
+        ('dc', obj.site.slug if obj.site else None),
+        ('cluster', obj.cluster.name if obj.cluster else None),
+        ('tenant', obj.tenant.name if obj.tenant else None),
+        ('device_role', obj.role.name if obj.role else None),
+        ('platform', obj.platform.name if obj.platform else None),
+        ('manufacturer', obj.device_type.manufacturer.name if obj.device_type is defined and obj.device_type and obj.device_type.manufacturer else None),
+        ('device_type', obj.device_type.model if obj.device_type is defined and obj.device_type else None),
+        ('location', obj.location.name if obj.location is defined and obj.location else None),
+        ('rack', obj.rack.name if obj.rack is defined and obj.rack else None),
+        ('description', obj.description if obj.description else None),
+      ] -%}
+      {%- set row.ok = true -%}
+    {%- endif -%}
+  {%- endif -%}
+
+  {%- if row.ok -%}
+    {#- Normalize the modules CF to a non-empty list, then emit one row per module. -#}
+    {%- set raw_modules = obj.cf.get('prometheus_exporter_modules') -%}
+    {%- set mods = namespace(list=[]) -%}
+    {%- if raw_modules is string and raw_modules -%}
+      {%- set mods.list = [raw_modules] -%}
+    {%- elif raw_modules is iterable and raw_modules is not string -%}
+      {%- set mods.list = raw_modules | select | list -%}
+    {%- endif -%}
+    {%- if not mods.list -%}
+      {%- set mods.list = [row.default] -%}
+    {%- endif -%}
+
+    {%- for module in mods.list -%}
+      {%- set row_fields = [('module', module)] + row.fields -%}
+      {%- set ns.rows = ns.rows + [(row.addr, row_fields)] -%}
+    {%- endfor -%}
+  {%- endif -%}
+{%- endfor -%}
+[
+{%- for scrape_target, fields in ns.rows %}
+    {
+        "targets": ["{{ scrape_target }}"],
+        "labels": {{ build_labels(fields) }}
+    }{% if not loop.last %},{% endif %}
+{%- endfor %}
+]

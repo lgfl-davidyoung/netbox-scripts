@@ -1,14 +1,14 @@
 # NetBox Prometheus HTTP SD Export Templates
 
-NetBox export templates that emit Prometheus `http_sd_config` JSON. Two for exporter-routed scrapes (node_exporter, snmp_exporter, etc.) and three for blackbox-exporter probes (ICMP, TCP, HTTP, DNS, ...).
+NetBox export templates that emit Prometheus `http_sd_config` JSON. Two for exporter-routed scrapes (node_exporter, snmp_exporter, etc.) and one for blackbox-exporter probes (ICMP, TCP, HTTP, DNS, ...).
 
 | File | Bind to | Purpose |
 |---|---|---|
 | [device-prometheus-sd.j2](device-prometheus-sd.j2) | `dcim.device` | One target per device that has a `prometheus-export-template` config context entry |
 | [service-prometheus-sd.j2](service-prometheus-sd.j2) | `ipam.service` | One target per (service, port) pair, with labels inherited from the parent device/VM |
-| [blackbox-device-vm-sd.j2](blackbox-device-vm-sd.j2) | `dcim.device` + `virtualization.virtualmachine` | One blackbox row per (device-or-VM, module). Probes `primary_ip`. |
-| [blackbox-service-sd.j2](blackbox-service-sd.j2) | `ipam.service` | One blackbox row per (service, module). Probes `parent.primary_ip:ports[0]` (first port only). |
-| [blackbox-ipaddress-sd.j2](blackbox-ipaddress-sd.j2) | `ipam.ipaddress` | One blackbox row per (IP, module). Probes the IP itself. |
+| [blackbox-prometheus-sd.j2](blackbox-prometheus-sd.j2) | `dcim.device` + `virtualization.virtualmachine` + `ipam.service` + `ipam.ipaddress` | One blackbox row per (object, module). Per-row dispatch picks the probe target: `primary_ip` for devices/VMs, the IP itself for IP addresses, `parent.primary_ip:ports[0]` (first port only) for services. |
+
+The three files [blackbox-device-vm-sd.j2](blackbox-device-vm-sd.j2), [blackbox-service-sd.j2](blackbox-service-sd.j2), and [blackbox-ipaddress-sd.j2](blackbox-ipaddress-sd.j2) are deprecated — they were the first iteration of blackbox support and have been replaced by the single consolidated template above. They remain in the tree temporarily and can be removed once the consolidated template is verified working.
 
 See [CLAUDE.md](CLAUDE.md) for the full data model, label reference, exporter-routing rules, and Jinja gotchas. A NetBox-compatible JSON Schema for the config-context shape lives at [prometheus-export-template.schema.json](prometheus-export-template.schema.json) — upload it as a Config Context Profile (Extras → Config Context Profiles → Add) to get validation in the NetBox UI.
 
@@ -118,18 +118,18 @@ Set a custom field named `prometheus_exporter_<param>` on the device to override
 
 ## Opt in to blackbox probing
 
-Blackbox probing is driven by a single custom field — **no config context required**. Each blackbox template emits every active object with a usable address; you narrow at the SD URL with a tag filter (`&tag=blackbox-probe` or similar).
+Blackbox probing is driven by a single custom field — **no config context required**. The template emits every active object with a usable address; you narrow at the SD URL with a tag filter (`&tag=blackbox-probe` or similar).
 
 1. Create the CF: Customization → Custom Fields → Add. Name: `prometheus_exporter_modules`. Type: multi-select. Choices: the blackbox module names configured in your local `blackbox.yml` (e.g. `icmp`, `tcp_connect`, `http_2xx`, `https_2xx`, `dns_lookup`). Content types: `dcim.device`, `virtualization.virtualmachine`, `ipam.service`, `ipam.ipaddress`.
 
-2. Install the three blackbox templates (Customization → Export Templates → Add) — content types and names per the table above. Pick names that match the `?export=` slugs in [prometheus/scrape-configs.yml](prometheus/scrape-configs.yml) (`blackbox-device-vm`, `blackbox-service`, `blackbox-ipaddress`).
+2. Install the blackbox template: Customization → Export Templates → Add. **Name:** `blackbox-prometheus-sd` (must match the `?export=` slug in [prometheus/scrape-configs.yml](prometheus/scrape-configs.yml)). **Content types:** tick all four (`dcim | device`, `virtualization | virtual machine`, `ipam | service`, `ipam | ip address`). **MIME type:** `application/json`. **Template code:** paste the contents of [blackbox-prometheus-sd.j2](blackbox-prometheus-sd.j2).
 
-3. Wire up the blackbox jobs from [prometheus/scrape-configs.yml](prometheus/scrape-configs.yml). All four blackbox jobs share one `relabel_configs` block (YAML anchor) that swaps `__address__` to the blackbox exporter (`localhost:9115`) and lifts the `module` label into `__param_module`.
+3. Wire up the four blackbox scrape jobs from [prometheus/scrape-configs.yml](prometheus/scrape-configs.yml) — one per content-type endpoint, all hitting the same template. They share one `relabel_configs` block (YAML anchor `&blackbox_relabel`) that swaps `__address__` to the blackbox exporter (`localhost:9115`) and lifts the `module` label into `__param_module`.
 
 4. Leave `prometheus_exporter_modules` unset on most objects — the defaults handle the common case:
    - Devices, VMs, IPs → `icmp`
-   - Services → `tcp_connect`
+   - Services → `http_2xx`
 
    Override on individual objects (or via bulk edit) to probe HTTP, DNS, etc. Multi-value CFs explode into one row per module.
 
-Full reference (label set per content type, port handling, edge cases) in [CLAUDE.md → Blackbox probes](CLAUDE.md#blackbox-probes).
+Full reference (label set per branch, port handling, edge cases) in [CLAUDE.md → Blackbox probes](CLAUDE.md#blackbox-probes).
