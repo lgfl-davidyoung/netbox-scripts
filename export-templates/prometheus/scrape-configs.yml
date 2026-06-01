@@ -11,7 +11,7 @@
 scrape_configs:
   - job_name: netbox-sd-devices
     http_sd_configs:
-      - url: https://netbox-dev.internal.lgfl.net/api/dcim/devices/?export=prometheus_device
+      - url: https://netbox-dev.internal.lgfl.net/api/dcim/devices/?export=prometheus-device
         authorization:
           type: "Token"
           credentials: "lOG6F4fhi551ZzbzeY1gPLFmejXx7HAjwQ49lDcG"
@@ -21,3 +21,58 @@ scrape_configs:
       - source_labels: [__param_target]
         target_label: instance
         regex: (.+)
+
+  # ----- Blackbox probes -----
+  # The blackbox exporter runs on the local Prometheus host. Each blackbox job
+  # below shares the same swap: SD emits `targets: [<probe-target>]` and
+  # `labels: {module: ...}`; this relabel moves the probe target to
+  # __param_target, the module label to __param_module, and rewrites
+  # __address__ to the blackbox exporter. metrics_path: /probe is the blackbox
+  # endpoint.
+  #
+  # Filter the SD URL with `&tag=<tag>` to narrow probing to a subset of
+  # objects. Without a tag filter, every active object is probed.
+
+  - job_name: netbox-blackbox-devices
+    metrics_path: /probe
+    http_sd_configs:
+      - url: https://netbox-dev.internal.lgfl.net/api/dcim/devices/?export=blackbox-device-vm
+        authorization:
+          type: "Token"
+          credentials: "lOG6F4fhi551ZzbzeY1gPLFmejXx7HAjwQ49lDcG"
+    relabel_configs: &blackbox_relabel
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - source_labels: [module]
+        target_label: __param_module
+      - target_label: __address__
+        replacement: localhost:9115
+
+  - job_name: netbox-blackbox-vms
+    metrics_path: /probe
+    http_sd_configs:
+      - url: https://netbox-dev.internal.lgfl.net/api/virtualization/virtual-machines/?export=blackbox-device-vm
+        authorization:
+          type: "Token"
+          credentials: "lOG6F4fhi551ZzbzeY1gPLFmejXx7HAjwQ49lDcG"
+    relabel_configs: *blackbox_relabel
+
+  - job_name: netbox-blackbox-services
+    metrics_path: /probe
+    http_sd_configs:
+      - url: https://netbox-dev.internal.lgfl.net/api/ipam/services/?export=blackbox-service
+        authorization:
+          type: "Token"
+          credentials: "lOG6F4fhi551ZzbzeY1gPLFmejXx7HAjwQ49lDcG"
+    relabel_configs: *blackbox_relabel
+
+  - job_name: netbox-blackbox-ipaddresses
+    metrics_path: /probe
+    http_sd_configs:
+      - url: https://netbox-dev.internal.lgfl.net/api/ipam/ip-addresses/?export=blackbox-ipaddress
+        authorization:
+          type: "Token"
+          credentials: "lOG6F4fhi551ZzbzeY1gPLFmejXx7HAjwQ49lDcG"
+    relabel_configs: *blackbox_relabel

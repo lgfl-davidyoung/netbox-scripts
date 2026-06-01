@@ -1,0 +1,86 @@
+{#-
+  Prometheus HTTP SD export template — Blackbox probes for IP addresses.
+  Bind to: ipam.ipaddress
+
+  Emits one row per (IP, module) pair. Probe address is the IP itself
+  (no port, no /mask — blackbox modules supply their own port semantics).
+
+  Module list comes from the `prometheus_exporter_modules` custom field
+  (multi-select or text). When unset/empty, defaults to ['icmp'].
+
+  Filtering is the consumer's responsibility — narrow via tag filters on the
+  SD URL (e.g. ?tag=blackbox-probe). The template emits every active IP.
+
+  `target_name` is a best-effort derivation from `assigned_object` (interface
+  on a device, vminterface on a VM, or fallback). `dns_name` is emitted as
+  its own label so an unassigned IP can still be identified.
+
+  Pair with the canonical blackbox relabel in scrape-configs.yml.
+-#}
+
+{%- macro jstr(s) -%}
+{{ s|string|replace('\\', '\\\\')|replace('"', '\\"')|replace('\n', '\\n')|replace('\r', '\\r')|replace('\t', '\\t') }}
+{%- endmacro -%}
+
+{%- macro build_labels(fields) -%}
+  {%- set lbl = namespace(parts=[]) -%}
+  {%- for name, value in fields -%}
+    {%- if value -%}
+      {%- set lbl.parts = lbl.parts + ['"' ~ name ~ '": "' ~ jstr(value)|trim ~ '"'] -%}
+    {%- endif -%}
+  {%- endfor -%}
+  { {{ lbl.parts | join(', ') }} }
+{%- endmacro -%}
+
+{%- set ns = namespace(rows=[]) -%}
+{%- for ip in queryset -%}
+  {%- if ip.status and ip.address -%}
+
+    {#- Normalize the modules CF to a non-empty list. -#}
+    {%- set raw_modules = ip.cf.get('prometheus_exporter_modules') -%}
+    {%- set mods = namespace(list=[]) -%}
+    {%- if raw_modules is string and raw_modules -%}
+      {%- set mods.list = [raw_modules] -%}
+    {%- elif raw_modules is iterable and raw_modules is not string -%}
+      {%- set mods.list = raw_modules | select | list -%}
+    {%- endif -%}
+    {%- if not mods.list -%}
+      {%- set mods.list = ['icmp'] -%}
+    {%- endif -%}
+
+    {#- target_name: walk the assigned object to find a useful name. -#}
+    {%- set assigned = ip.assigned_object -%}
+    {%- set name_ns = namespace(value=None) -%}
+    {%- if assigned -%}
+      {%- if assigned.device is defined and assigned.device -%}
+        {%- set name_ns.value = assigned.device.name -%}
+      {%- elif assigned.virtual_machine is defined and assigned.virtual_machine -%}
+        {%- set name_ns.value = assigned.virtual_machine.name -%}
+      {%- elif assigned.name is defined -%}
+        {%- set name_ns.value = assigned.name -%}
+      {%- endif -%}
+    {%- endif -%}
+
+    {%- set info_fields = [
+      ('target_name', name_ns.value),
+      ('dns_name', ip.dns_name if ip.dns_name else None),
+      ('tenant', ip.tenant.name if ip.tenant else None),
+      ('description', ip.description if ip.description else None),
+    ] -%}
+
+    {%- set probe_addr = ip.address.ip|string -%}
+
+    {%- for module in mods.list -%}
+      {%- set row_fields = [('module', module)] + info_fields -%}
+      {%- set ns.rows = ns.rows + [(probe_addr, row_fields)] -%}
+    {%- endfor -%}
+  {%- endif -%}
+{%- endfor -%}
+[
+{%- for scrape_target, fields in ns.rows %}
+    {
+        "targets": ["{{ scrape_target }}"],
+        "labels": {{ build_labels(fields) }}
+    }{% if not loop.last %},{% endif %}
+{%- endfor %}
+]

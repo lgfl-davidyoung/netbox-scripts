@@ -1,0 +1,81 @@
+{#-
+  Prometheus HTTP SD export template — Blackbox probes for Devices and VMs.
+  Bind to: dcim.device + virtualization.virtualmachine
+
+  Emits one row per (target, module) pair. Probe address is `primary_ip`
+  (no port — blackbox modules supply their own port semantics).
+
+  Module list comes from the `prometheus_exporter_modules` custom field
+  (multi-select or text). When unset/empty, defaults to ['icmp'].
+
+  Filtering is the consumer's responsibility — narrow via tag filters on the
+  SD URL (e.g. ?tag=blackbox-probe). The template emits every active object
+  with a primary IP.
+
+  Pair with the canonical blackbox relabel in scrape-configs.yml.
+-#}
+
+{%- macro jstr(s) -%}
+{{ s|string|replace('\\', '\\\\')|replace('"', '\\"')|replace('\n', '\\n')|replace('\r', '\\r')|replace('\t', '\\t') }}
+{%- endmacro -%}
+
+{%- macro build_labels(fields) -%}
+  {%- set lbl = namespace(parts=[]) -%}
+  {%- for name, value in fields -%}
+    {%- if value -%}
+      {%- set lbl.parts = lbl.parts + ['"' ~ name ~ '": "' ~ jstr(value)|trim ~ '"'] -%}
+    {%- endif -%}
+  {%- endfor -%}
+  { {{ lbl.parts | join(', ') }} }
+{%- endmacro -%}
+
+{%- set ns = namespace(rows=[]) -%}
+{%- for target in queryset -%}
+  {%- if target.status and target.primary_ip -%}
+
+    {#- Normalize the modules CF to a non-empty list. -#}
+    {%- set raw_modules = target.cf.get('prometheus_exporter_modules') -%}
+    {%- set mods = namespace(list=[]) -%}
+    {%- if raw_modules is string and raw_modules -%}
+      {%- set mods.list = [raw_modules] -%}
+    {%- elif raw_modules is iterable and raw_modules is not string -%}
+      {%- set mods.list = raw_modules | select | list -%}
+    {%- endif -%}
+    {%- if not mods.list -%}
+      {%- set mods.list = ['icmp'] -%}
+    {%- endif -%}
+
+    {#- Info labels shared across every module row for this object.
+        VM objects lack device_type/manufacturer/location/rack — guard with
+        `is defined` so the same template handles both content types. -#}
+    {%- set info_fields = [
+      ('target_name', target.name),
+      ('site', target.site.name if target.site else None),
+      ('dc', target.site.slug if target.site else None),
+      ('cluster', target.cluster.name if target.cluster else None),
+      ('tenant', target.tenant.name if target.tenant else None),
+      ('device_role', target.role.name if target.role else None),
+      ('platform', target.platform.name if target.platform else None),
+      ('manufacturer', target.device_type.manufacturer.name if target.device_type is defined and target.device_type and target.device_type.manufacturer else None),
+      ('device_type', target.device_type.model if target.device_type is defined and target.device_type else None),
+      ('location', target.location.name if target.location is defined and target.location else None),
+      ('rack', target.rack.name if target.rack is defined and target.rack else None),
+      ('description', target.description if target.description else None),
+    ] -%}
+
+    {%- set probe_addr = target.primary_ip.address.ip|string -%}
+
+    {%- for module in mods.list -%}
+      {%- set row_fields = [('module', module)] + info_fields -%}
+      {%- set ns.rows = ns.rows + [(probe_addr, row_fields)] -%}
+    {%- endfor -%}
+  {%- endif -%}
+{%- endfor -%}
+[
+{%- for scrape_target, fields in ns.rows %}
+    {
+        "targets": ["{{ scrape_target }}"],
+        "labels": {{ build_labels(fields) }}
+    }{% if not loop.last %},{% endif %}
+{%- endfor %}
+]

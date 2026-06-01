@@ -258,12 +258,93 @@ Per-target labels (differ between primary and OOB rows — each block has its ow
 
 `__param_*` labels are stripped by Prometheus after relabel (they're meta-labels). To preserve the probed address as a regular label on metrics, the Prometheus relabel config should copy `__param_target` to `instance` or similar — see "Prometheus relabel config" below. `__metrics_path__`, `__scrape_interval__`, `__scrape_timeout__` are also Prometheus meta-labels consumed natively — no relabel rule needed.
 
+## Blackbox probes
+
+Separate from the exporter-routing templates above, this folder also has three templates that emit Prometheus SD rows for **blackbox-exporter probing** (ICMP, TCP connect, HTTP, DNS, etc.). The blackbox exporter runs on the local Prometheus host; the templates emit `(probe-target, module)` pairs and Prometheus' `relabel_configs` swap the address to the blackbox endpoint.
+
+The three blackbox templates are independent of the `prometheus-export-template[-oob][-services]` config-context system — they're CF-driven, not config-context-driven.
+
+### Data model
+
+Opt-in is **per object** via a single custom field `prometheus_exporter_modules` (multi-select or list-valued text). The CF value is one or more blackbox module names (`icmp`, `tcp_connect`, `http_2xx`, `dns_lookup`, etc.). Each module value emits its own SD row.
+
+**Emission is unconditional** — every active object with a usable address appears in the SD output. To probe a subset, narrow at the SD URL with `&tag=<tag>` (NetBox tag filter). The templates themselves do no filtering.
+
+**Defaults when the CF is unset:**
+
+| Content type | Default module |
+|---|---|
+| `dcim.device`, `virtualization.virtualmachine` | `icmp` |
+| `ipam.ipaddress` | `icmp` |
+| `ipam.service` | `tcp_connect` (services are port-specific; ICMP wouldn't use the port) |
+
+### Probe targets
+
+| Template | Bind to | Probe target |
+|---|---|---|
+| [blackbox-device-vm-sd.j2](blackbox-device-vm-sd.j2) | `dcim.device` **and** `virtualization.virtualmachine` (one template, multi-content-type) | `primary_ip` (no port) |
+| [blackbox-ipaddress-sd.j2](blackbox-ipaddress-sd.j2) | `ipam.ipaddress` | the IP itself (no port) |
+| [blackbox-service-sd.j2](blackbox-service-sd.j2) | `ipam.service` | `parent.primary_ip:ports[0]` (first port only; IPv6 bracket-wrapped) |
+
+Services with multiple ports emit one row per module against the **first** port. Multi-port probing would produce identical SD rows differing only in port, which the SD layer can't disambiguate — pick the canonical port at the service level if you need different ports probed differently, split into multiple Services.
+
+### Labels emitted
+
+All blackbox rows carry `module` (regular label, swapped to `__param_module` by relabel). Beyond that:
+
+| Label | Devices/VMs | IPs | Services |
+|---|---|---|---|
+| `module` | ✓ | ✓ | ✓ |
+| `target_name` | device/VM name | best-effort from `assigned_object.device.name` / `.virtual_machine.name` / `.name` | parent device/VM name |
+| `service_name`, `service_protocol` | — | — | ✓ |
+| `dns_name` | — | ✓ | — |
+| `site`, `dc`, `cluster`, `device_role`, `platform` | ✓ | — | ✓ (from parent) |
+| `manufacturer`, `device_type`, `location`, `rack` | ✓ (devices only — guarded `is defined` for VMs) | — | ✓ (from parent, same guard) |
+| `tenant`, `description` | ✓ | ✓ | ✓ |
+
+IP addresses don't carry site/role labels — they aren't directly associated with those. If an IP is interface-assigned and you need site/role on the probe row, scrape via the device/VM template instead.
+
+### Prometheus relabel
+
+The blackbox jobs in [prometheus/scrape-configs.yml](prometheus/scrape-configs.yml) all share the same relabel block:
+
+```yaml
+metrics_path: /probe
+relabel_configs:
+  - source_labels: [__address__]
+    target_label: __param_target
+  - source_labels: [__param_target]
+    target_label: instance
+  - source_labels: [module]
+    target_label: __param_module
+  - target_label: __address__
+    replacement: localhost:9115
+```
+
+YAML anchor (`&blackbox_relabel` / `*blackbox_relabel`) is used in scrape-configs.yml so the four jobs (devices, vms, services, ip-addresses) share one definition.
+
+### Worked example
+
+Device `srv-app-01` (active, primary_ip `10.0.0.5`) with CF `prometheus_exporter_modules = ["icmp", "tcp_connect"]`. The device/VM template emits:
+
+```json
+[
+  {"targets": ["10.0.0.5"], "labels": {"module": "icmp", "target_name": "srv-app-01", ...}},
+  {"targets": ["10.0.0.5"], "labels": {"module": "tcp_connect", "target_name": "srv-app-01", ...}}
+]
+```
+
+After relabel, Prometheus scrapes `localhost:9115/probe?target=10.0.0.5&module=icmp` (and the same with `module=tcp_connect`). The `instance` label is `10.0.0.5` on both rows.
+
 ## Templates
 
 The live templates are the source of truth — copy from them when installing into NetBox:
 
 - Device template (bind to `dcim.device`): [device-prometheus-sd.j2](device-prometheus-sd.j2)
 - Service template (bind to `ipam.service`): [service-prometheus-sd.j2](service-prometheus-sd.j2)
+- Blackbox device/VM template (bind to `dcim.device` + `virtualization.virtualmachine`): [blackbox-device-vm-sd.j2](blackbox-device-vm-sd.j2)
+- Blackbox service template (bind to `ipam.service`): [blackbox-service-sd.j2](blackbox-service-sd.j2)
+- Blackbox IP address template (bind to `ipam.ipaddress`): [blackbox-ipaddress-sd.j2](blackbox-ipaddress-sd.j2)
 
 ## Prometheus relabel config
 
@@ -316,16 +397,20 @@ These all bit during the original development and the templates are written arou
 ## TODO / known gaps
 
 - No deduplication between device-emitted targets and service-emitted targets. If a device exposes port 9100 via both its config context and an IPAM Service entry, Prometheus will see two targets at the same `host:port`. Currently treated as harmless; relabel can dedupe by `instance` if it matters.
-- Blackbox-style probes (ICMP, HTTP, TCP) are deliberately out of scope. The natural pattern is a separate scrape job with `static_configs` or its own export template that emits flat target lists, with `__address__` → `__param_target` → exporter swap handled in `relabel_configs`.
+- Blackbox service rows only probe the first port of a multi-port `ipam.service`. Multi-port probing via blackbox would produce duplicate SD rows differing only by port, which the SD layer can't represent — split into multiple Services if that matters.
+- No deduplication between the blackbox device/VM template and the blackbox IP address template. A device whose primary IP is also a managed IPAM record will appear in both SD outputs (with different label sets). Narrow via tag filtering on whichever endpoint is canonical for your environment.
 
 ## Repo layout suggestion
 
 ```
 .
 ├── CLAUDE.md                          # this file
-├── templates/
-│   ├── device-prometheus-sd.j2        # bind to dcim.device
-│   └── service-prometheus-sd.j2       # bind to ipam.service
+├── device-prometheus-sd.j2            # bind to dcim.device
+├── service-prometheus-sd.j2           # bind to ipam.service
+├── blackbox-device-vm-sd.j2           # bind to dcim.device + virtualization.virtualmachine
+├── blackbox-service-sd.j2             # bind to ipam.service
+├── blackbox-ipaddress-sd.j2           # bind to ipam.ipaddress
+├── prometheus-export-template.schema.json   # Config Context Profile schema
 ├── prometheus/
 │   └── scrape-configs.yml             # example prometheus.yml fragment
 └── README.md                          # human-facing overview

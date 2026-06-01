@@ -1,0 +1,97 @@
+{#-
+  Prometheus HTTP SD export template — Blackbox probes for Services.
+  Bind to: ipam.service
+
+  Emits one row per (service, module) pair. Probe address is
+  `parent.primary_ip:ports[0]` — the first port if the service lists more
+  than one (blackbox needs a single host:port per scrape).
+
+  Module list comes from the service's `prometheus_exporter_modules` custom
+  field (multi-select or text). When unset/empty, defaults to
+  ['tcp_connect'] — services are port-specific so ICMP doesn't fit.
+
+  Filtering is the consumer's responsibility — narrow via tag filters on the
+  SD URL (e.g. ?tag=blackbox-probe). The template emits every service whose
+  parent is active and has a primary IP.
+
+  NetBox 4.5: `service.parent` is the GenericForeignKey accessor for
+  device-or-VM (replacing the separate `device` / `virtual_machine` FKs).
+
+  Pair with the canonical blackbox relabel in scrape-configs.yml.
+-#}
+
+{%- macro jstr(s) -%}
+{{ s|string|replace('\\', '\\\\')|replace('"', '\\"')|replace('\n', '\\n')|replace('\r', '\\r')|replace('\t', '\\t') }}
+{%- endmacro -%}
+
+{%- macro build_labels(fields) -%}
+  {%- set lbl = namespace(parts=[]) -%}
+  {%- for name, value in fields -%}
+    {%- if value -%}
+      {%- set lbl.parts = lbl.parts + ['"' ~ name ~ '": "' ~ jstr(value)|trim ~ '"'] -%}
+    {%- endif -%}
+  {%- endfor -%}
+  { {{ lbl.parts | join(', ') }} }
+{%- endmacro -%}
+
+{%- macro target_addr(ip, port) -%}
+  {%- if ip.version == 6 -%}
+    [{{ ip }}]:{{ port }}
+  {%- else -%}
+    {{ ip }}:{{ port }}
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- set ns = namespace(rows=[]) -%}
+{%- for service in queryset -%}
+  {%- set parent = service.parent -%}
+  {%- if parent and parent.status and parent.primary_ip and service.ports -%}
+
+    {#- Normalize the modules CF to a non-empty list. -#}
+    {%- set raw_modules = service.cf.get('prometheus_exporter_modules') -%}
+    {%- set mods = namespace(list=[]) -%}
+    {%- if raw_modules is string and raw_modules -%}
+      {%- set mods.list = [raw_modules] -%}
+    {%- elif raw_modules is iterable and raw_modules is not string -%}
+      {%- set mods.list = raw_modules | select | list -%}
+    {%- endif -%}
+    {%- if not mods.list -%}
+      {%- set mods.list = ['tcp_connect'] -%}
+    {%- endif -%}
+
+    {%- set info_fields = [
+      ('target_name', parent.name),
+      ('service_name', service.name),
+      ('service_protocol', service.protocol),
+      ('site', parent.site.name if parent.site else None),
+      ('dc', parent.site.slug if parent.site else None),
+      ('cluster', parent.cluster.name if parent.cluster else None),
+      ('tenant', parent.tenant.name if parent.tenant else None),
+      ('device_role', parent.role.name if parent.role else None),
+      ('platform', parent.platform.name if parent.platform else None),
+      ('manufacturer', parent.device_type.manufacturer.name if parent.device_type is defined and parent.device_type and parent.device_type.manufacturer else None),
+      ('device_type', parent.device_type.model if parent.device_type is defined and parent.device_type else None),
+      ('location', parent.location.name if parent.location is defined and parent.location else None),
+      ('rack', parent.rack.name if parent.rack is defined and parent.rack else None),
+      ('description', parent.description if parent.description is defined and parent.description else None),
+    ] -%}
+
+    {#- First port only — blackbox scrapes a single host:port per row.
+        Multi-port services would otherwise produce duplicate probe targets
+        differing only by port, which the SD layer can't disambiguate. -#}
+    {%- set probe_addr = target_addr(parent.primary_ip.address.ip, service.ports[0])|trim -%}
+
+    {%- for module in mods.list -%}
+      {%- set row_fields = [('module', module)] + info_fields -%}
+      {%- set ns.rows = ns.rows + [(probe_addr, row_fields)] -%}
+    {%- endfor -%}
+  {%- endif -%}
+{%- endfor -%}
+[
+{%- for scrape_target, fields in ns.rows %}
+    {
+        "targets": ["{{ scrape_target }}"],
+        "labels": {{ build_labels(fields) }}
+    }{% if not loop.last %},{% endif %}
+{%- endfor %}
+]
