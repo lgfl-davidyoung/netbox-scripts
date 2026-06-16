@@ -1,6 +1,24 @@
 {#-
-  Prometheus HTTP SD export template — Services.
+  Prometheus HTTP SD export template — Services (direct scrape).
   Bind to: ipam.service
+
+  Emits one direct-scrape target per (service, port) pair for every active
+  service whose parent device/VM has a primary IP. The scrape target is
+  `<parent primary IP>:<port>`; Prometheus' job-level scheme and metrics_path
+  apply (no per-target override) unless the custom field below is set.
+
+  Per-service override — custom field `prometheus_scrape_url` on ipam.service:
+  when set, its value is fed verbatim into the target (`__address__`) and the
+  service's `ports` field is ignored (exactly one row is emitted). The template
+  does not parse it — whatever you put in the CF is what Prometheus receives as
+  the target, so make it whatever your scrape job expects (`host:port`, or a
+  full URL if your relabel config decomposes it).
+
+  This template does NOT do exporter routing (snmp_exporter, fortigate_exporter,
+  etc.) where many services ride a single shared exporter address via
+  __param_target. Handle that in the Prometheus scrape job's relabel_configs
+  (move __address__ to __param_target, rewrite __address__ to the exporter) —
+  same pattern as the blackbox jobs. See prometheus/scrape-configs.yml.
 -#}
 
 {%- macro jstr(s) -%}
@@ -25,55 +43,35 @@
   {%- endif -%}
 {%- endmacro -%}
 
-{%- macro param_value(v) -%}
-{%- if v is none or v == '' -%}
-{%- elif v is string -%}
-{{ v }}
-{%- elif v is iterable -%}
-{{ v | select | map('string') | join(',') }}
-{%- else -%}
-{{ v }}
-{%- endif -%}
-{%- endmacro -%}
-
 {%- set ns = namespace(rows=[]) -%}
 
-{#- Per-parent memo. Everything except the service name/protocol/ports/CF depends
-    only on the parent device/VM, but `get_config_context()` is NetBox's slow path
-    (it re-queries and merges every ConfigContext on each call) and the parent FK
-    walk (site/role/platform/device_type/manufacturer/…) repeats too. The common
-    case is many service ports on ONE server (e.g. SNMP on 161/1161/2161), so doing
-    that work once per service instead of once per parent is the whole cost.
+{#- Per-parent memo. The info labels (site/role/platform/device_type/…) come from
+    the parent device/VM and repeat across every service port on that parent, so
+    resolve them once. Key on the GenericForeignKey columns
+    (`parent_object_type_id` / `parent_object_id`) so a cache hit doesn't even
+    resolve the `service.parent` GFK. A dict gives O(1) lookup — no per-service
+    linear scan over the cache (which was O(services × distinct-parents)).
 
-    Key on the GenericForeignKey columns (`parent_object_type_id`,
-    `parent_object_id`) rather than `service.parent`, so a cache hit doesn't even
-    resolve the GFK. `cache.items` is a list of (key, entry) — linear scan is fine
-    for the handful of distinct parents in any real queryset. -#}
-{%- set cache = namespace(items=[]) -%}
+    Mutation note: this relies on in-place `dict.update()` / `list.append()`,
+    which NetBox's (non-immutable) SandboxedEnvironment permits. Appending in
+    place avoids the O(rows²) cost of rebuilding `ns.rows` with `+ [...]`.
+
+    NOTE: this template no longer calls get_config_context() at all — direct
+    scrape needs nothing from the parent beyond its primary IP and info labels,
+    so NetBox's slow ConfigContext merge is off the hot path entirely. -#}
+{%- set cache = {} -%}
 
 {%- for service in queryset -%}
-  {%- set key = (service.parent_object_type_id|string) ~ ':' ~ (service.parent_object_id|string) -%}
+  {%- set key = (service.parent_object_type_id, service.parent_object_id) -%}
 
-  {%- set lookup = namespace(entry=None) -%}
-  {%- for ck, cv in cache.items -%}
-    {%- if ck == key -%}{%- set lookup.entry = cv -%}{%- endif -%}
-  {%- endfor -%}
-
-  {%- if lookup.entry is none -%}
-    {#- First service seen for this parent — resolve the GFK and derive everything. -#}
+  {%- if cache.get(key) is none -%}
+    {#- First service seen for this parent — resolve the GFK and derive labels.
+        Build the entry and stash it via update(); the dict mutation is visible
+        outside this block even though a plain `{% set %}` would not be (Jinja
+        scope rule), so we re-read with cache.get(key) below. -#}
     {%- set parent = service.parent -%}
-    {%- if parent and parent.status and parent.primary_ip -%}
-      {#- The optional `prometheus-export-template-services` context on the parent adds
-          exporter routing, scheme, metrics_path, params, and exporter_type on top.
-          Without it, services emit as bare direct-scrape rows with info labels only. -#}
-      {%- set prom = parent.get_config_context().get('prometheus-export-template-services') or {} -%}
-
-      {%- set params_ns = namespace(parts=[]) -%}
-      {%- for k, v in (prom.get('params') or {}).items() -%}
-        {%- set final = param_value(v)|trim -%}
-        {%- set params_ns.parts = params_ns.parts + [('__param_' ~ k, final)] -%}
-      {%- endfor -%}
-
+    {%- set pip = parent.primary_ip if parent else None -%}
+    {%- if parent and parent.status and pip -%}
       {%- set parent_info = [
         ('target_name', parent.name),
         ('site', parent.site.name if parent.site else None),
@@ -88,27 +86,18 @@
         ('rack', parent.rack.name if parent.rack is defined and parent.rack else None),
         ('description', parent.description if parent.description is defined and parent.description else None),
       ] -%}
-
-      {%- set lookup.entry = {
+      {%- set _ = cache.update({key: {
         'ok': true,
-        'ip': parent.primary_ip.address.ip,
-        'exporter': prom.get('exporter'),
-        'scheme': prom.get('scheme') or prom.get('target_scheme'),
-        'metrics_path': prom.get('metrics_path'),
-        'scrape_interval': prom.get('scrape_interval'),
-        'scrape_timeout': prom.get('scrape_timeout'),
-        'exporter_type': prom.get('exporter_type'),
-        'param_parts': params_ns.parts,
+        'ip': pip.address.ip,
         'info': parent_info,
-      } -%}
+      }}) -%}
     {%- else -%}
       {#- Inactive / no primary_ip — cache the skip so sibling services don't re-resolve. -#}
-      {%- set lookup.entry = {'ok': false} -%}
+      {%- set _ = cache.update({key: {'ok': false}}) -%}
     {%- endif -%}
-    {%- set cache.items = cache.items + [(key, lookup.entry)] -%}
   {%- endif -%}
 
-  {%- set entry = lookup.entry -%}
+  {%- set entry = cache.get(key) -%}
   {%- if entry.ok -%}
     {#- Per-service labels (the only things that vary between services on one parent). -#}
     {%- set svc_fields = [
@@ -116,35 +105,19 @@
       ('service_protocol', service.protocol),
       ('disable_alerts', 'true' if service.cf.get('monitoring_disable_alerts') else None),
     ] -%}
-    {%- for port in service.ports -%}
-      {%- set probe_addr = target_addr(entry.ip, port)|trim -%}
-      {%- if entry.exporter -%}
-        {%- set scrape_target = entry.exporter -%}
-        {%- if entry.scheme -%}
-          {%- set param_target = entry.scheme ~ '://' ~ probe_addr -%}
-        {%- else -%}
-          {%- set param_target = probe_addr -%}
-        {%- endif -%}
-        {%- set scheme_label = None -%}
-      {%- else -%}
-        {%- set scrape_target = probe_addr -%}
-        {%- set param_target = None -%}
-        {%- set scheme_label = entry.scheme -%}
-      {%- endif -%}
-      {#- With exporter routing __address__ is the exporter, so emit instance = the
-          probed service address to keep targets distinct (param_target is set only
-          when an exporter is in use; build_labels drops it otherwise). -#}
-      {%- set row_fields = [
-        ('__param_target', param_target),
-        ('instance', param_target),
-        ('__scheme__', scheme_label),
-        ('__metrics_path__', entry.metrics_path),
-        ('__scrape_interval__', entry.scrape_interval),
-        ('__scrape_timeout__', entry.scrape_timeout),
-        ('exporter_type', entry.exporter_type),
-      ] + entry.param_parts + entry.info + svc_fields -%}
-      {%- set ns.rows = ns.rows + [(scrape_target, row_fields)] -%}
-    {%- endfor -%}
+
+    {%- set override = service.cf.get('prometheus_scrape_url') -%}
+    {%- if override -%}
+      {#- Override: the CF value is used verbatim as the target. ports ignored,
+          one row emitted. Decomposition (scheme/path) is the consumer's job. -#}
+      {%- set _ = ns.rows.append((override, entry.info + svc_fields)) -%}
+    {%- else -%}
+      {#- Default: one direct-scrape row per port at the parent's primary IP. -#}
+      {%- for port in service.ports -%}
+        {%- set scrape_target = target_addr(entry.ip, port)|trim -%}
+        {%- set _ = ns.rows.append((scrape_target, entry.info + svc_fields)) -%}
+      {%- endfor -%}
+    {%- endif -%}
   {%- endif -%}
 {%- endfor -%}
 [
