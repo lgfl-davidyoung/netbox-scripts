@@ -7,10 +7,9 @@
   "properties": {
     "prometheus-export-template-oob": {
       "allOf": [
-        {"$ref": "#/$defs/exportTemplateBlockCommon"},
-        {"required": ["port"]}
+        {"$ref": "#/$defs/exportTemplateBlockCommon"}
       ],
-      "description": "OOB (iDRAC/iLO/BMC) scrape configuration. Typically scoped per manufacturer. Devices without an oob_ip skip the OOB row automatically."
+      "description": "OOB (iDRAC/iLO/BMC) scrape configuration. Typically scoped per manufacturer. Devices without an oob_ip skip the OOB row automatically. `port` is optional — omit it to emit a portless target (Prometheus uses the scheme default port)."
     }
   },
   "$defs": {
@@ -22,7 +21,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 65535,
-          "description": "TCP port on the device or exporter target."
+          "description": "TCP port on the device or exporter target. Optional — omit to emit a portless target (Prometheus uses the scheme default port)."
         },
         "exporter_type": {
           "type": "string",

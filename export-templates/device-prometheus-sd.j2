@@ -3,9 +3,10 @@
   Bind to: dcim.device
 
   Emits one scrape target per active device whose config context carries a
-  `prometheus-export-template` block with a `port` and which has a primary_ip.
-  The scrape target is the device's primary IP (or the exporter address when
-  exporter routing is in use).
+  `prometheus-export-template` block and which has a primary_ip. The scrape
+  target is the device's primary IP (or the exporter address when exporter
+  routing is in use). `port` is optional — when omitted the target carries no
+  `:port` suffix and Prometheus falls back to the scheme's default port.
 
   OOB (iDRAC/iLO/BMC) monitoring is a SEPARATE template — device-oob-prometheus-sd.j2,
   driven by the `prometheus-export-template-oob` context key. The two are fully
@@ -31,9 +32,9 @@
 
 {%- macro target_addr(ip, port) -%}
   {%- if ip.version == 6 -%}
-    [{{ ip }}]:{{ port }}
+    {%- if port -%}[{{ ip }}]:{{ port }}{%- else -%}[{{ ip }}]{%- endif -%}
   {%- else -%}
-    {{ ip }}:{{ port }}
+    {%- if port -%}{{ ip }}:{{ port }}{%- else -%}{{ ip }}{%- endif -%}
   {%- endif -%}
 {%- endmacro -%}
 
@@ -51,7 +52,7 @@
 {%- set ns = namespace(rows=[]) -%}
 {%- for target in queryset -%}
   {%- set cfg = target.get_config_context().get('prometheus-export-template') -%}
-  {%- if target.status and cfg and target.primary_ip and cfg.get('port') -%}
+  {%- if target.status and cfg and target.primary_ip -%}
 
     {%- set info_fields = [
       ('target_name', target.name),
@@ -69,7 +70,7 @@
       ('disable_alerts', 'true' if target.cf.get('monitoring_disable_alerts') else None),
     ] -%}
 
-    {%- set device_addr = target_addr(target.primary_ip.address.ip, cfg.port)|trim -%}
+    {%- set device_addr = target_addr(target.primary_ip.address.ip, cfg.get('port'))|trim -%}
 
     {#- Scheme: with exporter routing, scheme prefixes __param_target so the exporter
         knows what protocol to probe. With no exporter, scheme is emitted as the

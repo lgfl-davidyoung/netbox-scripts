@@ -47,11 +47,11 @@ Devices opt into discovery by having a `prometheus-export-template` key in their
 }
 ```
 
-The template reads `port`, `exporter_type`, `scheme`, `metrics_path`, `exporter`, `params`, `scrape_interval`, and `scrape_timeout` when present (see "Exporter routing", "Scheme", "Extra params", and "Scrape interval / timeout" below). `port` is the only field required by the Config Context Profile schema (for the primary and OOB blocks); `exporter_type` is optional — when omitted, no `exporter_type` label is emitted. OOB monitoring is configured via a separate top-level `prometheus-export-template-oob` context (see "OOB IP routing" below).
+The template reads `port`, `exporter_type`, `scheme`, `metrics_path`, `exporter`, `params`, `scrape_interval`, and `scrape_timeout` when present (see "Exporter routing", "Scheme", "Extra params", and "Scrape interval / timeout" below). No field inside the block is required by the Config Context Profile schema — the block's presence alone opts the device in. `port` is optional: when omitted the target is emitted without a `:port` suffix and Prometheus falls back to the scheme's default port. `exporter_type` is also optional — when omitted, no `exporter_type` label is emitted. OOB monitoring is configured via a separate top-level `prometheus-export-template-oob` context (see "OOB IP routing" below).
 
 Services are **not** driven by config context at all — the service template is a pure direct-scrape with an optional per-service URL override (see "Service-level scrapes" below).
 
-The primary-IP target is emitted only when both `prometheus-export-template` is present and `port` is set. Drop the `prometheus-export-template` context entirely on devices that only need OOB or service-level monitoring.
+The primary-IP target is emitted whenever `prometheus-export-template` is present and the device has a primary_ip (`port` is optional). Drop the `prometheus-export-template` context entirely on devices that only need OOB or service-level monitoring.
 
 ### Exporter routing (snmp_exporter, fortigate_exporter, etc.)
 
@@ -170,8 +170,8 @@ NetBox merges all applicable contexts onto each device, so Linux-on-Dell, Window
 
 **Emission rules** (each template renders its own queryset pass independently):
 
-- The **device template** emits a primary target iff `prometheus-export-template` is set, `device.primary_ip` exists, and the context has `port`.
-- The **OOB template** emits an OOB target iff `prometheus-export-template-oob` is set, `device.oob_ip` exists, and the context has `port`.
+- The **device template** emits a primary target iff `prometheus-export-template` is set and `device.primary_ip` exists. `port` is optional (omitted → portless target).
+- The **OOB template** emits an OOB target iff `prometheus-export-template-oob` is set and `device.oob_ip` exists. `port` is optional (omitted → portless target).
 - The two are independent templates with independent scrape jobs, so a device appears in 0, 1, or 2 of the SD outputs.
 
 **Shared vs. per-target labels:** the info labels (`target_name`, `site`, `dc`, `cluster`, `tenant`, `device_role`, `platform`, `manufacturer`, `device_type`, `location`, `rack`, `description`) are identical on both rows — each template derives them the same way from the device. The per-target labels — `__address__` (`"targets"` value), `exporter_type`, `__param_target`, `__param_*`, `__metrics_path__`, `__scheme__`, `__scrape_interval__`, `__scrape_timeout__` — come from each context independently. Notably `exporter_type` differs between the rows (e.g. `node_exporter` on primary, `idrac_exporter` on OOB), which is what lets dashboards filter to the right exporter family.
