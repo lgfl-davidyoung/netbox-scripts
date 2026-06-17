@@ -47,7 +47,9 @@ Devices opt into discovery by having a `prometheus-export-template` key in their
 }
 ```
 
-The template reads `port`, `exporter_type`, `scheme`, `metrics_path`, `exporter`, `params`, `scrape_interval`, and `scrape_timeout` when present (see "Exporter routing", "Scheme", "Extra params", and "Scrape interval / timeout" below). `port` is the only field required by the Config Context Profile schema (for the primary and OOB blocks); `exporter_type` is optional — when omitted, no `exporter_type` label is emitted. `target_scheme` is accepted as a deprecated alias for `scheme`. OOB monitoring is configured via a separate top-level `prometheus-export-template-oob` context (see "OOB IP routing" below). Service-level monitoring (typically SNMP for app-level scrapes) uses a separate top-level `prometheus-export-template-services` context (see "Service-level scrapes" below).
+The template reads `port`, `exporter_type`, `scheme`, `metrics_path`, `exporter`, `params`, `scrape_interval`, and `scrape_timeout` when present (see "Exporter routing", "Scheme", "Extra params", and "Scrape interval / timeout" below). `port` is the only field required by the Config Context Profile schema (for the primary and OOB blocks); `exporter_type` is optional — when omitted, no `exporter_type` label is emitted. OOB monitoring is configured via a separate top-level `prometheus-export-template-oob` context (see "OOB IP routing" below).
+
+Services are **not** driven by config context at all — the service template is a pure direct-scrape with an optional per-service URL override (see "Service-level scrapes" below).
 
 The primary-IP target is emitted only when both `prometheus-export-template` is present and `port` is set. Drop the `prometheus-export-template` context entirely on devices that only need OOB or service-level monitoring.
 
@@ -107,8 +109,6 @@ Example without an exporter — direct HTTPS scrape:
 
 Result: `__scheme__=https`. Prometheus scrapes the target over HTTPS regardless of the scrape job's default.
 
-`target_scheme` is accepted as a legacy alias for `scheme` — existing config contexts that use it continue to work, but new contexts should use `scheme`.
-
 ### Extra params
 
 `params` is a flat dict mapped 1:1 to `__param_<key>` labels. Values can be:
@@ -133,13 +133,13 @@ Set `scrape_interval` and/or `scrape_timeout` in the config context to override 
 
 These are emitted as the Prometheus meta-labels `__scrape_interval__` and `__scrape_timeout__`, which Prometheus consumes natively — no relabel rule needed. When unset, the per-target labels are omitted and Prometheus falls back to the scrape job's defaults.
 
-For services, the override is pulled from the *parent device's* config context (same as `exporter` / `scheme` / `params`), so every (service, port) row inherits it.
+These apply to **device** rows only — the service template does not emit per-target interval/timeout (services are direct-scrape and use the job defaults).
 
 ### OOB IP routing (iDRAC, BMCs)
 
 A single physical server often needs two scrape targets — node_exporter (or windows_exporter) on the primary IP, and an iDRAC/BMC exporter on the OOB IP — with different exporters, ports, and ownership. The software side varies by OS (Linux → node_exporter:9100, Windows → windows_exporter:9182), but the hardware side is identical across all servers from the same vendor.
 
-To keep those two concerns independent, OOB monitoring uses a **separate top-level config-context key**: `prometheus-export-template-oob`. The schema mirrors `prometheus-export-template` (`port`, `exporter_type`, `scheme`, `exporter`, `params`, `metrics_path`, `scrape_interval`, `scrape_timeout` all supported). Scope it to a manufacturer (e.g. Dell) in NetBox; the OS-specific `prometheus-export-template` stays scoped to a role.
+To keep those two concerns independent, OOB monitoring uses a **separate top-level config-context key**, `prometheus-export-template-oob`, rendered by a **separate export template** — [device-oob-prometheus-sd.j2](device-oob-prometheus-sd.j2) (the primary key is rendered by [device-prometheus-sd.j2](device-prometheus-sd.j2)). Both bind to `dcim.device` and are scraped by their own job (`?export=prometheus-device` and `?export=prometheus-device-oob`). The OOB schema mirrors `prometheus-export-template` (`port`, `exporter_type`, `scheme`, `exporter`, `params`, `metrics_path`, `scrape_interval`, `scrape_timeout` all supported). Scope it to a manufacturer (e.g. Dell) in NetBox; the OS-specific `prometheus-export-template` stays scoped to a role.
 
 Example — a Dell server running Linux gets both contexts merged:
 
@@ -168,38 +168,38 @@ In NetBox you'd configure each separately:
 
 NetBox merges all applicable contexts onto each device, so Linux-on-Dell, Windows-on-Dell, and "OOB-only" appliances each get exactly what they need without overlap.
 
-**Emission rules:**
+**Emission rules** (each template renders its own queryset pass independently):
 
-- Primary target is emitted iff `prometheus-export-template` is set, `device.primary_ip` exists, and the context has `port`.
-- OOB target is emitted iff `prometheus-export-template-oob` is set, `device.oob_ip` exists, and the context has `port`.
-- Both checks are independent: a device emits 0, 1, or 2 targets.
+- The **device template** emits a primary target iff `prometheus-export-template` is set, `device.primary_ip` exists, and the context has `port`.
+- The **OOB template** emits an OOB target iff `prometheus-export-template-oob` is set, `device.oob_ip` exists, and the context has `port`.
+- The two are independent templates with independent scrape jobs, so a device appears in 0, 1, or 2 of the SD outputs.
 
-**Shared vs. per-target labels:** the info labels (`target_name`, `site`, `dc`, `cluster`, `tenant`, `device_role`, `platform`, `manufacturer`, `device_type`, `location`, `rack`, `description`) are identical on both rows. The per-target labels — `__address__` (`"targets"` value), `exporter_type`, `__param_target`, `__param_*`, `__metrics_path__`, `__scheme__`, `__scrape_interval__`, `__scrape_timeout__` — come from each context independently. Notably `exporter_type` differs between the rows (e.g. `node_exporter` on primary, `idrac_exporter` on OOB), which is what lets dashboards filter to the right exporter family.
+**Shared vs. per-target labels:** the info labels (`target_name`, `site`, `dc`, `cluster`, `tenant`, `device_role`, `platform`, `manufacturer`, `device_type`, `location`, `rack`, `description`) are identical on both rows — each template derives them the same way from the device. The per-target labels — `__address__` (`"targets"` value), `exporter_type`, `__param_target`, `__param_*`, `__metrics_path__`, `__scheme__`, `__scrape_interval__`, `__scrape_timeout__` — come from each context independently. Notably `exporter_type` differs between the rows (e.g. `node_exporter` on primary, `idrac_exporter` on OOB), which is what lets dashboards filter to the right exporter family.
 
-**Custom-field overrides apply to the primary emission only.** The OOB context is self-contained — to override an OOB param, edit the config context, not a custom field. This avoids the ambiguity of "which target does this CF apply to?" and means iDRAC-style scrape config can't be accidentally broken by a stray `prometheus_exporter_*` CF on the device.
+**Custom-field overrides apply to the primary (device) template only.** The OOB template reads no `prometheus_exporter_*` CFs and no `prometheus_exporter_scrape_interval`/`_timeout` — to override an OOB param, edit the config context, not a custom field. (The one CF the OOB template does read is `monitoring_disable_alerts`, which is a shared info label, not a param.) This avoids the ambiguity of "which target does this CF apply to?" and means iDRAC-style scrape config can't be accidentally broken by a stray `prometheus_exporter_*` CF on the device.
 
 ### Service-level scrapes
 
-Many devices need application-level monitoring on top of (or instead of) the host scrape — for example a server running several SNMP-monitored applications on different ports (`161` for system MIBs, `1161` for App A, `2161` for App B). All these scrapes typically share one `snmp_exporter` address and authentication but cover different ports, which is exactly what NetBox **Services** model (a Service has a name, protocol, and one or more ports on a parent device or VM).
+The service template is a **pure direct-scrape**: it emits one row per (service, port) pair for every Service in the queryset whose parent has a `primary_ip` and is `active`. The scrape target is `<parent primary IP>:<port>`. It reads **nothing** from config context — no `prometheus-export-template-services` block, no `get_config_context()` call. Each row carries only the info labels (`target_name`, `service_name`, `service_protocol`, `site`, etc.) and inherits Prometheus' job-level scheme / `metrics_path`.
 
-The service template emits one row per (service, port) pair for every Service in the queryset whose parent has a `primary_ip` and is `active`. It is independent of any device-level context — services emit even if the parent has no Prometheus config context at all. Without context, the row is a bare direct-scrape with just the info labels (`target_name`, `service_name`, `service_protocol`, `site`, etc.).
+A Service with multiple ports emits one row per port. Inactive parents and parents with no `primary_ip` are skipped.
 
-To add exporter routing, scheme, params, or `exporter_type` to service rows, set a `prometheus-export-template-services` top-level context on the parent. The schema mirrors the other two blocks except `port` is not required (services contribute their own ports). Example — a server with SNMP-monitored applications on three ports:
+#### Target override — `prometheus_scrape_url` custom field
 
-```json
-{
-    "prometheus-export-template-services": {
-        "exporter_type": "snmp_exporter",
-        "exporter": "snmp-exporter.internal.lgfl.net:9116",
-        "scheme": "http",
-        "params": {"auth": "public_v2"}
-    }
-}
+For the cases where "poll the parent IP on the service port" isn't right (a metrics endpoint on a different port, a fixed hostname, a full URL), set the **text custom field `prometheus_scrape_url` on `ipam.service`**. Its value is fed **verbatim** into the target — the template does no parsing. When set, the Service's `ports` field is ignored and exactly one row is emitted.
+
+```
+10.0.0.5:9443                          →  targets: ["10.0.0.5:9443"]
+https://10.0.0.5:9443/custom/metrics   →  targets: ["https://10.0.0.5:9443/custom/metrics"]
 ```
 
-Scope this where the SNMP exporter applies (per role, per site, or globally). The device-level `prometheus-export-template` and `prometheus-export-template-oob` contexts are independent and do not influence service emission.
+What you put in the CF is what Prometheus receives as the target, so make it match what the scrape job expects. A bare `host:port` works as-is; if you put a full URL there, your scrape job's `relabel_configs` are responsible for splitting it into `__scheme__` / `__address__` / `__metrics_path__`. The template emits no `__scheme__` / `__metrics_path__` / `__param_*` of its own for the override — that's deliberate, to keep it a dumb passthrough.
 
-Currently the SNMP `module` (or any other param that varies per service) must live in the device-level context, meaning all services on the same device share params. Per-service overrides via a JSON custom field on `ipam.service` is a planned follow-up.
+#### Multi-target exporters (snmp_exporter, etc.)
+
+The old "service via exporter" model (a `prometheus-export-template-services` config context that routed every service on a device through one shared exporter address via `__param_target`) has been **removed**. It didn't generalise: a single exporter block forced one set of params on every service/port on the device, and per-service variation (e.g. a different SNMP `module` per app) wasn't expressible.
+
+Shared-exporter routing (snmp_exporter, fortigate_exporter, blackbox-style probes) is now handled **entirely on the Prometheus side** — the export template just emits the plain `host:port` (or a `prometheus_scrape_url` override) and the scrape job's `relabel_configs` move that address to `__param_target` and rewrite `__address__` to the exporter. This is the same pattern the blackbox jobs already use (see [prometheus/scrape-configs.yml](prometheus/scrape-configs.yml)). Narrow the scrape job to the relevant services with a tag filter on the SD URL (`&tag=snmp`); drive any per-service params (e.g. the SNMP `module`) from custom fields surfaced as labels, or from static config in the scrape job.
 
 ### Custom field overrides
 
@@ -219,9 +219,9 @@ Multi-select custom fields return lists, which the template CSV-joins automatica
 
 ### Alert suppression (`monitoring_disable_alerts`)
 
-A separate boolean custom field `monitoring_disable_alerts` (note the `monitoring_` prefix — it is **not** part of the `prometheus_exporter_*` param family) emits the `disable_alerts` label on every row for that object. When the CF is set/truthy the label is emitted as `disable_alerts="true"`; when unset or false the label is omitted entirely (alert rules should treat "absent" as "alert normally"). All three live templates honour it:
+A separate boolean custom field `monitoring_disable_alerts` (note the `monitoring_` prefix — it is **not** part of the `prometheus_exporter_*` param family) emits the `disable_alerts` label on every row for that object. When the CF is set/truthy the label is emitted as `disable_alerts="true"`; when unset or false the label is omitted entirely (alert rules should treat "absent" as "alert normally"). All live templates honour it:
 
-- **Device template** — read from the device; applies to both the primary and OOB rows (shared info labels).
+- **Device templates** (primary and OOB) — read from the device; emitted on both the primary row and the OOB row (shared info label). It is the only custom field the OOB template reads.
 - **Service template** — read from the Service object itself (not the parent device), so suppression is per-service.
 - **Blackbox template** — read from the iterated object (device/VM/IP/service), one `disable_alerts` value per object applied to every module row.
 
@@ -229,9 +229,9 @@ Consume it in Alertmanager/alert rules by matching the label, e.g. `... unless o
 
 ### Services
 
-Services don't have config context; they have a `ports` field (a list). The service template emits one target per (service, port) pair, with labels inherited from the parent device or VM (NetBox 4.5+ exposes both via the `service.parent` GenericForeignKey accessor). Additional labels: `service_name`, `service_protocol`.
+Services have a `ports` field (a list). The service template emits one direct-scrape target per (service, port) pair at the parent's primary IP, with info labels inherited from the parent device or VM (NetBox 4.5+ exposes both via the `service.parent` GenericForeignKey accessor). Additional labels: `service_name`, `service_protocol`.
 
-Service emission is independent of `prometheus-export-template` and `prometheus-export-template-oob` — those contexts drive device emission only. Exporter routing for services is opt-in via the parent's `prometheus-export-template-services` context (see "Service-level scrapes" above).
+Service emission is independent of all `prometheus-export-template*` config-context keys — those drive device emission only. Services read nothing from config context; per-service customisation is the `prometheus_scrape_url` custom-field override (see "Service-level scrapes" above), and shared-exporter routing is done in the Prometheus scrape job's `relabel_configs`, not in the template.
 
 ## Labels emitted
 
@@ -255,7 +255,7 @@ Shared labels (identical on primary and OOB rows for the same device):
 | `description`     | description field               |
 | `disable_alerts`   | `"true"` when the `monitoring_disable_alerts` custom field is set on the device (services: on the service); omitted otherwise |
 
-Per-target labels (differ between primary and OOB rows — each block has its own values):
+Per-target labels — these are emitted by the **device templates** only (the primary [device-prometheus-sd.j2](device-prometheus-sd.j2) and the OOB [device-oob-prometheus-sd.j2](device-oob-prometheus-sd.j2); each derives them from its own context block). The service template emits **none** of these: it only sets the target (either `parent IP:port` or the verbatim `prometheus_scrape_url` value) plus the shared info labels. It never emits `exporter_type`, `__param_*`, `__param_target`, `instance`, `__scheme__`, or `__metrics_path__` — for shared-exporter routing on a service row, handle it in your scrape job's `relabel_configs`.
 
 | Label                 | Source                          |
 |-----------------------|---------------------------------|
@@ -268,13 +268,13 @@ Per-target labels (differ between primary and OOB rows — each block has its ow
 | `__scrape_interval__` | block's `scrape_interval` key, or `prometheus_exporter_scrape_interval` CF (primary only) |
 | `__scrape_timeout__`  | block's `scrape_timeout` key, or `prometheus_exporter_scrape_timeout` CF (primary only) |
 
-`__param_*` labels are stripped by Prometheus after relabel (they're meta-labels). To preserve the probed address as a regular label on metrics, the device and service templates now emit `instance` directly (= `__param_target`) on exporter-routed rows, so the older "copy `__param_target` to `instance`" relabel rule is no longer required (keeping it is harmless — same value). `__metrics_path__`, `__scrape_interval__`, `__scrape_timeout__` are also Prometheus meta-labels consumed natively — no relabel rule needed.
+`__param_*` labels are stripped by Prometheus after relabel (they're meta-labels). To preserve the probed address as a regular label on metrics, the device template emits `instance` directly (= `__param_target`) on exporter-routed rows, so the older "copy `__param_target` to `instance`" relabel rule is no longer required (keeping it is harmless — same value). `__metrics_path__`, `__scrape_interval__`, `__scrape_timeout__` are also Prometheus meta-labels consumed natively — no relabel rule needed.
 
 ## Blackbox probes
 
 Separate from the exporter-routing templates above, this folder has a single template that emits Prometheus SD rows for **blackbox-exporter probing** (ICMP, TCP connect, HTTP, DNS, etc.) across four content types. The blackbox exporter runs on the local Prometheus host; the template emits `(probe-target, module)` pairs and Prometheus' `relabel_configs` swap the address to the blackbox endpoint.
 
-The blackbox template is independent of the `prometheus-export-template[-oob][-services]` config-context system — it's CF-driven, not config-context-driven.
+The blackbox template is independent of the `prometheus-export-template[-oob]` config-context system — it's CF-driven, not config-context-driven.
 
 ### One template, four content types
 
@@ -365,7 +365,8 @@ A previous iteration shipped three separate templates ([blackbox-device-vm-sd.j2
 
 The live templates are the source of truth — copy from them when installing into NetBox:
 
-- Device template (bind to `dcim.device`): [device-prometheus-sd.j2](device-prometheus-sd.j2)
+- Device primary template (bind to `dcim.device`): [device-prometheus-sd.j2](device-prometheus-sd.j2)
+- Device OOB template (bind to `dcim.device`): [device-oob-prometheus-sd.j2](device-oob-prometheus-sd.j2)
 - Service template (bind to `ipam.service`): [service-prometheus-sd.j2](service-prometheus-sd.j2)
 - Blackbox template (bind to `dcim.device` + `virtualization.virtualmachine` + `ipam.service` + `ipam.ipaddress`): [blackbox-prometheus-sd.j2](blackbox-prometheus-sd.j2)
 
@@ -418,7 +419,7 @@ These all bit during the original development and the templates are written arou
 - **IPv6 needs brackets** — `[2001:db8::1]:9100`. `ip.version` reliably distinguishes (v4/v6 returns `4`/`6`).
 - **`target.device_type` only exists on Devices, not VMs** — guard with `is defined and ...` when handling parents that could be either.
 - **`target.role` vs `target.device_role`** — NetBox 4.x is `target.role`. Older versions used `device_role`.
-- **`get_config_context()` is expensive and uncached** — every call re-queries and merges all ConfigContexts (NetBox doesn't annotate the export-template queryset), so calling it per row is the dominant render cost. The service template memoizes all parent-derived data (config-context block, params, and the parent FK walk) by the GenericForeignKey columns (`parent_object_type_id` / `parent_object_id`), so each parent is computed once even when it has many service ports — and a cache hit skips resolving the `service.parent` GFK entirely. Keep this memo if editing; reverting to per-service `get_config_context()` makes the template crawl. The deeper fix (annotating the queryset) isn't reachable from a template.
+- **`get_config_context()` is expensive and uncached** — every call re-queries and merges all ConfigContexts (NetBox doesn't annotate the export-template queryset), so calling it per row is the dominant render cost. The **device** template pays this once per device. The **service** template no longer calls it at all (direct scrape needs only the parent's primary IP and info labels). The service template still memoizes the parent FK walk (site/role/platform/device_type/…) by the GenericForeignKey columns (`parent_object_type_id` / `parent_object_id`), so each parent is resolved once even with many service ports — and a cache hit skips resolving the `service.parent` GFK entirely. Keep this memo if editing. If you reintroduce `get_config_context()` into a per-service path, memoize it the same way or the template will crawl.
 
 ## TODO / known gaps
 
@@ -431,15 +432,15 @@ These all bit during the original development and the templates are written arou
 ```
 .
 ├── CLAUDE.md                          # this file
-├── device-prometheus-sd.j2            # bind to dcim.device
-├── service-prometheus-sd.j2           # bind to ipam.service
+├── device-prometheus-sd.j2            # bind to dcim.device (primary IP — prometheus-export-template key)
+├── device-oob-prometheus-sd.j2        # bind to dcim.device (OOB IP — prometheus-export-template-oob key)
+├── service-prometheus-sd.j2           # bind to ipam.service (direct scrape + prometheus_scrape_url override)
 ├── blackbox-prometheus-sd.j2          # bind to dcim.device + virtualization.virtualmachine + ipam.service + ipam.ipaddress
 ├── blackbox-device-vm-sd.j2           # deprecated — superseded by blackbox-prometheus-sd.j2
 ├── blackbox-service-sd.j2             # deprecated — superseded by blackbox-prometheus-sd.j2
 ├── blackbox-ipaddress-sd.j2           # deprecated — superseded by blackbox-prometheus-sd.j2
 ├── profile-prometheus-export-template.json           # Config Context Profile for the primary key
 ├── profile-prometheus-export-template-oob.json       # Config Context Profile for the -oob key
-├── profile-prometheus-export-template-services.json  # Config Context Profile for the -services key
 ├── prometheus/
 │   └── scrape-configs.yml             # example prometheus.yml fragment
 └── README.md                          # human-facing overview

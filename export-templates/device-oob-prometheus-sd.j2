@@ -1,18 +1,20 @@
 {#-
-  Prometheus HTTP SD export template — Devices (primary IP).
+  Prometheus HTTP SD export template — Device OOB (iDRAC/iLO/BMC).
   Bind to: dcim.device
 
   Emits one scrape target per active device whose config context carries a
-  `prometheus-export-template` block with a `port` and which has a primary_ip.
-  The scrape target is the device's primary IP (or the exporter address when
-  exporter routing is in use).
+  `prometheus-export-template-oob` block with a `port` and which has an oob_ip.
+  The scrape target is the device's OOB IP (or the exporter address when
+  exporter routing is in use — the common case for iDRAC/iLO via idrac_exporter).
 
-  OOB (iDRAC/iLO/BMC) monitoring is a SEPARATE template — device-oob-prometheus-sd.j2,
-  driven by the `prometheus-export-template-oob` context key. The two are fully
+  Primary / software monitoring is a SEPARATE template — device-prometheus-sd.j2,
+  driven by the `prometheus-export-template` context key. The two are fully
   independent: a device can appear in neither, one, or both SD outputs.
 
-  prometheus_exporter_* custom fields override / extend this (primary) emission's
-  params; monitoring_disable_alerts emits the disable_alerts info label.
+  The OOB context is SELF-CONTAINED: prometheus_exporter_* custom-field overrides
+  do NOT apply here (they target the primary emission). The only custom field read
+  is monitoring_disable_alerts, which is a shared info label (identical on the
+  primary and OOB rows for the same device).
 -#}
 
 {%- macro jstr(s) -%}
@@ -50,8 +52,8 @@
 
 {%- set ns = namespace(rows=[]) -%}
 {%- for target in queryset -%}
-  {%- set cfg = target.get_config_context().get('prometheus-export-template') -%}
-  {%- if target.status and cfg and target.primary_ip and cfg.get('port') -%}
+  {%- set cfg = target.get_config_context().get('prometheus-export-template-oob') -%}
+  {%- if target.status and cfg and target.oob_ip and cfg.get('port') -%}
 
     {%- set info_fields = [
       ('target_name', target.name),
@@ -69,7 +71,7 @@
       ('disable_alerts', 'true' if target.cf.get('monitoring_disable_alerts') else None),
     ] -%}
 
-    {%- set device_addr = target_addr(target.primary_ip.address.ip, cfg.port)|trim -%}
+    {%- set device_addr = target_addr(target.oob_ip.address.ip, cfg.port)|trim -%}
 
     {#- Scheme: with exporter routing, scheme prefixes __param_target so the exporter
         knows what protocol to probe. With no exporter, scheme is emitted as the
@@ -85,44 +87,23 @@
       {%- set scheme_label = scheme -%}
     {%- endif -%}
 
-    {#- Scrape interval / timeout (Prometheus meta-labels); CF wins over context. -#}
-    {%- set scrape_interval = target.cf.get('prometheus_exporter_scrape_interval') or cfg.get('scrape_interval') -%}
-    {%- set scrape_timeout = target.cf.get('prometheus_exporter_scrape_timeout') or cfg.get('scrape_timeout') -%}
-
-    {#- Params: context values, each overridable by a prometheus_exporter_<key> CF. -#}
+    {#- Params: context values only (no custom-field overrides on OOB). -#}
     {%- set params_ns = namespace(parts=[]) -%}
-    {%- set ctx_params = cfg.get('params') or {} -%}
-    {%- for k, v in ctx_params.items() -%}
-      {%- set cf_value = target.cf.get('prometheus_exporter_' ~ k) -%}
-      {%- set final = param_value(cf_value if cf_value else v)|trim -%}
-      {%- set params_ns.parts = params_ns.parts + [('__param_' ~ k, final)] -%}
-    {%- endfor -%}
-
-    {#- Extra prometheus_exporter_* CFs with no matching context param. Keys handled
-        out-of-band (not __param_*) are excluded from this sweep. -#}
-    {%- set reserved_cf_keys = ['scrape_interval', 'scrape_timeout'] -%}
-    {%- set seen_keys = (ctx_params.keys() | list) + reserved_cf_keys -%}
-    {%- for cf_name, cf_value in target.cf.items() -%}
-      {%- if cf_name.startswith('prometheus_exporter_') and cf_value -%}
-        {%- set param_key = cf_name[20:] -%}
-        {%- if param_key not in seen_keys -%}
-          {%- set final = param_value(cf_value)|trim -%}
-          {%- set params_ns.parts = params_ns.parts + [('__param_' ~ param_key, final)] -%}
-        {%- endif -%}
-      {%- endif -%}
+    {%- for k, v in (cfg.get('params') or {}).items() -%}
+      {%- set params_ns.parts = params_ns.parts + [('__param_' ~ k, param_value(v)|trim)] -%}
     {%- endfor -%}
 
     {#- With exporter routing __address__ is the exporter, so Prometheus' default
         instance (=__address__) would collide across every target behind that
-        exporter. Emit instance = the probed device address (param_target is set
+        exporter. Emit instance = the probed OOB address (param_target is set
         only when an exporter is in use; build_labels drops it otherwise). -#}
     {%- set fields = [
       ('__param_target', param_target),
       ('instance', param_target),
       ('__metrics_path__', cfg.get('metrics_path')),
       ('__scheme__', scheme_label),
-      ('__scrape_interval__', scrape_interval),
-      ('__scrape_timeout__', scrape_timeout),
+      ('__scrape_interval__', cfg.get('scrape_interval')),
+      ('__scrape_timeout__', cfg.get('scrape_timeout')),
       ('exporter_type', cfg.get('exporter_type')),
     ] + params_ns.parts + info_fields -%}
     {%- set ns.rows = ns.rows + [(scrape_target, fields)] -%}

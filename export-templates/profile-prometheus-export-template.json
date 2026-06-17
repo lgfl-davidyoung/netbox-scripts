@@ -34,12 +34,6 @@
           "enum": ["http", "https"],
           "description": "Protocol used to reach the device. With `exporter` set, scheme prefixes `__param_target` so the exporter knows what protocol to probe. Without `exporter`, scheme is emitted as the Prometheus `__scheme__` meta-label, overriding the scrape job default."
         },
-        "target_scheme": {
-          "type": "string",
-          "enum": ["http", "https"],
-          "deprecated": true,
-          "description": "Deprecated alias for `scheme`. Continues to work for backwards compatibility; prefer `scheme` in new contexts."
-        },
         "metrics_path": {
           "type": "string",
           "pattern": "^/.*",
