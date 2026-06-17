@@ -57,8 +57,8 @@ scrape_configs:
   - job_name: netbox-sd-services-snmp
     metrics_path: /snmp
     params:
-      module: [if_mib]          # static module; or lift from a label via relabel
-      auth: [public_v2]
+      module: [if_mib]          # static fallback; overridden per-service below
+      auth: [public_v2]         # static fallback; overridden per-service below
     http_sd_configs:
       - url: https://netbox-dev.internal.lgfl.net/api/ipam/services/?export=prometheus-service&tag=snmp
         authorization:
@@ -71,6 +71,16 @@ scrape_configs:
         target_label: instance
       - target_label: __address__
         replacement: snmp-exporter.internal.lgfl.net:9116
+      # Per-service module/auth from NetBox custom fields. The service template
+      # emits these as __meta_* labels; lift them into the snmp_exporter params.
+      # regex (.+) means the rule only fires when the CF is set, so the static
+      # params above remain the default for services that don't override.
+      - source_labels: [__meta_prometheus_exporter_modules]
+        target_label: __param_module
+        regex: (.+)
+      - source_labels: [__meta_prometheus_exporter_auth]
+        target_label: __param_auth
+        regex: (.+)
 
   # ----- Blackbox probes -----
   # The blackbox exporter runs on the local Prometheus host. Each blackbox job

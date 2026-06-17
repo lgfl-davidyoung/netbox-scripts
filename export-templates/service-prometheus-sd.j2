@@ -43,6 +43,17 @@
   {%- endif -%}
 {%- endmacro -%}
 
+{%- macro param_value(v) -%}
+{%- if v is none or v == '' -%}
+{%- elif v is string -%}
+{{ v }}
+{%- elif v is iterable -%}
+{{ v | select | map('string') | join(',') }}
+{%- else -%}
+{{ v }}
+{%- endif -%}
+{%- endmacro -%}
+
 {%- set ns = namespace(rows=[]) -%}
 
 {#- Per-parent memo. The info labels (site/role/platform/device_type/…) come from
@@ -99,11 +110,18 @@
 
   {%- set entry = cache.get(key) -%}
   {%- if entry.ok -%}
-    {#- Per-service labels (the only things that vary between services on one parent). -#}
+    {#- Per-service labels (the only things that vary between services on one parent).
+        The __meta_* labels surface per-service custom fields for the scrape job's
+        relabel_configs to consume (e.g. lift into __param_auth / __param_module for
+        a shared snmp_exporter). Like all __-prefixed labels they're available during
+        relabeling and dropped before the scrape. Multi-value CFs are CSV-joined;
+        empty CFs are omitted (build_labels drops falsy values). -#}
     {%- set svc_fields = [
       ('service_name', service.name),
       ('service_protocol', service.protocol),
       ('disable_alerts', 'true' if service.cf.get('monitoring_disable_alerts') else None),
+      ('__meta_prometheus_exporter_auth', param_value(service.cf.get('prometheus_exporter_auth'))|trim),
+      ('__meta_prometheus_exporter_modules', param_value(service.cf.get('prometheus_exporter_modules'))|trim),
     ] -%}
 
     {%- set override = service.cf.get('prometheus_scrape_url') -%}

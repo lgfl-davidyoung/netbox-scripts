@@ -109,6 +109,8 @@ When set, the service's `ports` field is ignored and one row is emitted. Create 
 
 For the "many services through one shared exporter" case (snmp_exporter, etc.), do the routing in the Prometheus scrape job — a `relabel_configs` block that moves `__address__` to `__param_target` and rewrites `__address__` to the exporter, exactly like the blackbox jobs in [prometheus/scrape-configs.yml](prometheus/scrape-configs.yml). Narrow the SD URL to the relevant services with a `&tag=` filter. Full details in [CLAUDE.md](CLAUDE.md#service-level-scrapes).
 
+To drive **per-service** exporter params, the service template surfaces two custom fields as relabel-only meta labels: `prometheus_exporter_auth` → `__meta_prometheus_exporter_auth` and `prometheus_exporter_modules` → `__meta_prometheus_exporter_modules` (multi-select CSV-joined). The `netbox-sd-services-snmp` job in [prometheus/scrape-configs.yml](prometheus/scrape-configs.yml) shows lifting them into `__param_module` / `__param_auth` (falling back to static params when a service doesn't set them). Assign both CFs to the `ipam | service` content type for the values to appear.
+
 ## Per-device overrides
 
 Set a custom field named `prometheus_exporter_<param>` on the device to override (or add) a single param without forking the config context. Multi-select custom fields are CSV-joined automatically.
