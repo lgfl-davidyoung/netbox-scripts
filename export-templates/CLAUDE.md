@@ -264,13 +264,13 @@ Per-target labels — these are emitted by the **device templates** only (the pr
 | `exporter_type`       | block's `exporter_type` key — identifies the exporter family (`node_exporter`, `snmp_exporter`, `idrac_exporter`, etc.). Optional; omitted when unset. |
 | `__param_<name>`      | block's `params` dict, or `prometheus_exporter_*` custom fields (primary only) |
 | `__param_target`      | device IP when `exporter` is set (with optional `scheme` prefix) |
-| `instance`            | mirror of `__param_target` — emitted only when `exporter` is set, so targets behind a shared exporter don't collide on the default `instance` (=`__address__`=exporter). Omitted on direct-scrape rows (Prometheus' `__address__` default is already correct). |
+| `instance`            | the probed device address as `host:port` (the `__param_target` value **without** any `scheme://` prefix) — emitted only when `exporter` is set, so targets behind a shared exporter don't collide on the default `instance` (=`__address__`=exporter). Omitted on direct-scrape rows (Prometheus' `__address__` default is already correct). |
 | `__metrics_path__`    | block's `metrics_path` key      |
 | `__scheme__`          | block's `scheme` key — emitted only when no `exporter` is set (otherwise scheme is baked into `__param_target`) |
 | `__scrape_interval__` | block's `scrape_interval` key, or `prometheus_exporter_scrape_interval` CF (primary only) |
 | `__scrape_timeout__`  | block's `scrape_timeout` key, or `prometheus_exporter_scrape_timeout` CF (primary only) |
 
-`__param_*` labels are stripped by Prometheus after relabel (they're meta-labels). To preserve the probed address as a regular label on metrics, the device template emits `instance` directly (= `__param_target`) on exporter-routed rows, so the older "copy `__param_target` to `instance`" relabel rule is no longer required (keeping it is harmless — same value). `__metrics_path__`, `__scrape_interval__`, `__scrape_timeout__` are also Prometheus meta-labels consumed natively — no relabel rule needed.
+`__param_*` labels are stripped by Prometheus after relabel (they're meta-labels). To preserve the probed address as a regular label on metrics, the device template emits `instance` directly on exporter-routed rows — the `host:port` address without the `scheme://` prefix that `__param_target` carries (the scheme isn't part of the target's identity). The older "copy `__param_target` to `instance`" relabel rule is no longer required; note it is **not** equivalent now (it would include the scheme), so drop it rather than keep it. `__metrics_path__`, `__scrape_interval__`, `__scrape_timeout__` are also Prometheus meta-labels consumed natively — no relabel rule needed.
 
 ## Blackbox probes
 

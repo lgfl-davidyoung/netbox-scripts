@@ -82,10 +82,15 @@
     {%- if cfg.get('exporter') -%}
       {%- set scrape_target = cfg.exporter -%}
       {%- set param_target = (scheme ~ '://' ~ device_addr) if scheme else device_addr -%}
+      {#- instance is the probed address WITHOUT the scheme prefix (host:port) — the
+          scheme isn't part of the target's identity. __param_target keeps the scheme
+          because the exporter needs to know what protocol to probe. -#}
+      {%- set instance_label = device_addr -%}
       {%- set scheme_label = None -%}
     {%- else -%}
       {%- set scrape_target = device_addr -%}
       {%- set param_target = None -%}
+      {%- set instance_label = None -%}
       {%- set scheme_label = scheme -%}
     {%- endif -%}
 
@@ -97,11 +102,12 @@
 
     {#- With exporter routing __address__ is the exporter, so Prometheus' default
         instance (=__address__) would collide across every target behind that
-        exporter. Emit instance = the probed OOB address (param_target is set
-        only when an exporter is in use; build_labels drops it otherwise). -#}
+        exporter. Emit instance = the probed OOB address (host:port, no scheme);
+        instance_label is set only when an exporter is in use, build_labels drops
+        it otherwise. -#}
     {%- set fields = [
       ('__param_target', param_target),
-      ('instance', param_target),
+      ('instance', instance_label),
       ('__metrics_path__', cfg.get('metrics_path')),
       ('__scheme__', scheme_label),
       ('__scrape_interval__', cfg.get('scrape_interval')),

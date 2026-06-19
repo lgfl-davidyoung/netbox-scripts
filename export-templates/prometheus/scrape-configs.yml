@@ -10,31 +10,26 @@
 
 scrape_configs:
   # ----- Devices: primary IP (node_exporter / snmp_exporter / etc.) -----
+  # No relabel needed: the template emits `instance` directly (the probed
+  # host:port, scheme stripped) on exporter-routed rows. Do NOT re-add a
+  # __param_target -> instance copy — it would put the scheme back on `instance`.
   - job_name: netbox-sd-devices
     http_sd_configs:
       - url: https://netbox-dev.internal.lgfl.net/api/dcim/devices/?export=prometheus-device
         authorization:
           type: "Token"
           credentials: "lOG6F4fhi551ZzbzeY1gPLFmejXx7HAjwQ49lDcG"
-    relabel_configs: &device_relabel
-      # Preserve the probed device address as `instance` when exporter routing
-      # is in use; otherwise __param_target is unset and this is a no-op.
-      - source_labels: [__param_target]
-        target_label: instance
-        regex: (.+)
 
   # ----- Devices: OOB IP (iDRAC / iLO / BMC) -----
   # Separate export template (device-oob-prometheus-sd.j2, ?export=prometheus-device-oob)
-  # driven by the `prometheus-export-template-oob` config-context key. Same relabel
-  # as the primary job — iDRAC/iLO typically ride an exporter, so __param_target is
-  # set and `instance` is preserved.
+  # driven by the `prometheus-export-template-oob` config-context key. Same as the
+  # primary job — no relabel needed, `instance` is emitted directly by the template.
   - job_name: netbox-sd-devices-oob
     http_sd_configs:
       - url: https://netbox-dev.internal.lgfl.net/api/dcim/devices/?export=prometheus-device-oob
         authorization:
           type: "Token"
           credentials: "lOG6F4fhi551ZzbzeY1gPLFmejXx7HAjwQ49lDcG"
-    relabel_configs: *device_relabel
 
   # ----- Services (direct scrape) -----
   # The service template emits direct-scrape targets (`<parent IP>:<port>`, or
